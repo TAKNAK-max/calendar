@@ -1,0 +1,18 @@
+{
+  "name": "ふたりカレンダー",
+  "short_name": "ふたりカレンダー",
+  "description": "夫婦で共有して使えるカレンダーアプリ",
+  "lang": "ja",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fefefd",
+  "theme_color": "#f15a24",
+  "icons": [
+    {
+      "src": "/calendar-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
