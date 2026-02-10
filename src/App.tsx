@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 
 type Person = 'tarchin' | 'yacchin'
 
@@ -17,12 +17,42 @@ type GoogleSettings = {
   calendarId: string
 }
 
+type ServerSyncPayload = {
+  startYear: number
+  endYear: number
+  entries: CalendarEntry[]
+}
+
+type ServerSyncResponse = {
+  years: number[]
+  entries: CalendarEntry[]
+}
+
 type ColorSettings = Record<string, string>
 
 type DayEditor = {
   isOpen: boolean
   date: string
   inputs: { rowId: string; value: string; color: string; entryId?: string }[]
+}
+
+type ModalPosition = {
+  x: number
+  y: number
+}
+
+type ModalDragState = {
+  pointerId: number
+  offsetX: number
+  offsetY: number
+  width: number
+  height: number
+}
+
+type TokenCache = {
+  clientId: string
+  accessToken: string
+  expiresAt: number
 }
 
 type GoogleEvent = {
@@ -48,7 +78,7 @@ declare global {
           initTokenClient: (config: {
             client_id: string
             scope: string
-            callback: (response: { access_token?: string; error?: string }) => void
+            callback: (response: { access_token?: string; error?: string; expires_in?: number }) => void
           }) => { requestAccessToken: (options?: { prompt?: string }) => void }
         }
       }
@@ -58,22 +88,31 @@ declare global {
 
 const WEEK_LABELS = ['日', '月', '火', '水', '木', '金', '土']
 const QUICK_ACTIONS: Record<Person, string[]> = {
-  tarchin: ['休暇'],
-  yacchin: ['早番', '中番', '遅番'],
+  tarchin: ['休'],
+  yacchin: ['早', '中', '遅'],
 }
-const TARCHIN_VACATION = '休暇'
+const TARCHIN_VACATION = '休'
+const LEGACY_QUICK_TEXT_MAP: Record<string, string> = {
+  休暇: '休',
+  早番: '早',
+  中番: '中',
+  遅番: '遅',
+}
 
 const STORAGE_ENTRIES = 'futari-calendar-entries'
 const STORAGE_PERSON = 'futari-calendar-person'
 const STORAGE_GOOGLE = 'futari-calendar-google'
 const STORAGE_COLORS = 'futari-calendar-colors'
+const STORAGE_SYNC_URL = 'futari-calendar-sync-url'
 const APP_SOURCE = 'futari-calendar-web'
+const DEFAULT_GOOGLE_CLIENT_ID = '719425138729-jo1krmiqsvlopbhc3ibome39degm61d9.apps.googleusercontent.com'
+const DEFAULT_SYNC_URL = '/calendar-api'
 const DEFAULT_FREE_TEXT_COLOR = '#7a869a'
 const DEFAULT_COLORS: ColorSettings = {
-  'tarchin:休暇': '#f39a7a',
-  'yacchin:早番': '#78aad8',
-  'yacchin:中番': '#8d95d6',
-  'yacchin:遅番': '#6dc99a',
+  'tarchin:休': '#f39a7a',
+  'yacchin:早': '#78aad8',
+  'yacchin:中': '#8d95d6',
+  'yacchin:遅': '#6dc99a',
 }
 
 const today = new Date()
@@ -106,7 +145,12 @@ function loadEntries(): CalendarEntry[] {
   if (!raw) return []
   try {
     const parsed = JSON.parse(raw) as CalendarEntry[]
-    return parsed.filter((item) => item.id && item.date && item.text && item.person && item.category)
+    return parsed
+      .filter((item) => item.id && item.date && item.text && item.person && item.category)
+      .map((item) => ({
+        ...item,
+        text: item.category === 'quick' ? LEGACY_QUICK_TEXT_MAP[item.text] ?? item.text : item.text,
+      }))
   } catch {
     return []
   }
@@ -123,16 +167,23 @@ function loadPerson(): Person {
 
 function loadGoogleSettings(): GoogleSettings {
   const raw = localStorage.getItem(STORAGE_GOOGLE)
-  if (!raw) return { clientId: '', calendarId: 'primary' }
+  if (!raw) return { clientId: DEFAULT_GOOGLE_CLIENT_ID, calendarId: 'primary' }
   try {
     const parsed = JSON.parse(raw) as GoogleSettings
     return {
-      clientId: parsed.clientId ?? '',
+      clientId: parsed.clientId?.trim() ? parsed.clientId : DEFAULT_GOOGLE_CLIENT_ID,
       calendarId: parsed.calendarId ?? 'primary',
     }
   } catch {
-    return { clientId: '', calendarId: 'primary' }
+    return { clientId: DEFAULT_GOOGLE_CLIENT_ID, calendarId: 'primary' }
   }
+}
+
+function loadSyncUrl(): string {
+  const raw = localStorage.getItem(STORAGE_SYNC_URL)
+  if (!raw) return DEFAULT_SYNC_URL
+  const normalized = raw.trim()
+  return normalized || DEFAULT_SYNC_URL
 }
 
 function actionKey(person: Person, action: string): string {
@@ -144,7 +195,16 @@ function loadColorSettings(): ColorSettings {
   if (!raw) return { ...DEFAULT_COLORS }
   try {
     const parsed = JSON.parse(raw) as ColorSettings
-    return { ...DEFAULT_COLORS, ...parsed }
+    const normalized: ColorSettings = { ...DEFAULT_COLORS }
+    for (const [key, value] of Object.entries(parsed)) {
+      const [person, action] = key.split(':')
+      if ((person === 'tarchin' || person === 'yacchin') && action) {
+        normalized[actionKey(person, LEGACY_QUICK_TEXT_MAP[action] ?? action)] = value
+      } else {
+        normalized[key] = value
+      }
+    }
+    return normalized
   } catch {
     return { ...DEFAULT_COLORS }
   }
@@ -210,7 +270,10 @@ function ensureGoogleScript(): Promise<void> {
   })
 }
 
-function requestAccessToken(clientId: string): Promise<string> {
+function requestAccessToken(
+  clientId: string,
+  prompt: '' | 'consent' = 'consent',
+): Promise<{ accessToken: string; expiresAt: number }> {
   return new Promise((resolve, reject) => {
     const oauth = window.google?.accounts?.oauth2
     if (!oauth) {
@@ -223,14 +286,16 @@ function requestAccessToken(clientId: string): Promise<string> {
       scope: 'https://www.googleapis.com/auth/calendar',
       callback: (response) => {
         if (response.access_token) {
-          resolve(response.access_token)
+          const expiresInSeconds = response.expires_in ?? 3600
+          const expiresAt = Date.now() + Math.max(60, expiresInSeconds - 60) * 1000
+          resolve({ accessToken: response.access_token, expiresAt })
         } else {
           reject(new Error(response.error ?? 'アクセストークン取得に失敗しました'))
         }
       },
     })
 
-    tokenClient.requestAccessToken({ prompt: 'consent' })
+    tokenClient.requestAccessToken({ prompt })
   })
 }
 
@@ -298,11 +363,21 @@ export default function App() {
   const [activeColorTarget, setActiveColorTarget] = useState<string | null>(null)
   const [syncMessage, setSyncMessage] = useState('')
   const [isSyncing, setIsSyncing] = useState(false)
+  const [serverSyncUrl, setServerSyncUrl] = useState(() => loadSyncUrl())
+  const [serverSyncMessage, setServerSyncMessage] = useState('')
+  const [isServerSyncing, setIsServerSyncing] = useState(false)
+  const [syncedYears, setSyncedYears] = useState<number[]>([])
+  const [isSyncReminderDismissed, setIsSyncReminderDismissed] = useState(false)
+  const [modalPosition, setModalPosition] = useState<ModalPosition | null>(null)
+  const tokenCacheRef = useRef<TokenCache | null>(null)
+  const hasAutoSyncedRef = useRef(false)
   const [dayEditor, setDayEditor] = useState<DayEditor>({
     isOpen: false,
     date: toISODate(today),
     inputs: [{ rowId: crypto.randomUUID(), value: '', color: DEFAULT_FREE_TEXT_COLOR }],
   })
+  const dayMenuRef = useRef<HTMLDivElement | null>(null)
+  const modalDragRef = useRef<ModalDragState | null>(null)
 
   const cells = useMemo(() => buildMonthGrid(activeMonth), [activeMonth])
 
@@ -315,13 +390,24 @@ export default function App() {
   }, [entries])
 
   const saveEntries = (nextEntries: CalendarEntry[]) => {
-    setEntries(nextEntries)
-    localStorage.setItem(STORAGE_ENTRIES, JSON.stringify(nextEntries))
+    const normalized = nextEntries.map((entry) =>
+      entry.category === 'quick' ? { ...entry, text: LEGACY_QUICK_TEXT_MAP[entry.text] ?? entry.text } : entry,
+    )
+    setEntries(normalized)
+    localStorage.setItem(STORAGE_ENTRIES, JSON.stringify(normalized))
   }
 
   const updateGoogleSettings = (nextSettings: GoogleSettings) => {
+    if (nextSettings.clientId.trim() !== googleSettings.clientId.trim()) {
+      tokenCacheRef.current = null
+    }
     setGoogleSettings(nextSettings)
     localStorage.setItem(STORAGE_GOOGLE, JSON.stringify(nextSettings))
+  }
+
+  const updateServerSyncUrl = (url: string) => {
+    setServerSyncUrl(url)
+    localStorage.setItem(STORAGE_SYNC_URL, url)
   }
 
   const changePerson = (person: Person) => {
@@ -357,6 +443,87 @@ export default function App() {
           : [{ rowId: crypto.randomUUID(), value: '', color: DEFAULT_FREE_TEXT_COLOR }],
     })
   }
+
+  const closeDayEditor = () => {
+    modalDragRef.current = null
+    setModalPosition(null)
+    setDayEditor((prev) => ({ ...prev, isOpen: false }))
+  }
+
+  const clampModalPosition = (x: number, y: number, width: number, height: number): ModalPosition => {
+    const padding = 8
+    const maxX = Math.max(padding, window.innerWidth - width - padding)
+    const maxY = Math.max(padding, window.innerHeight - height - padding)
+    return {
+      x: Math.min(Math.max(padding, x), maxX),
+      y: Math.min(Math.max(padding, y), maxY),
+    }
+  }
+
+  const onDayMenuHeadPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement
+    if (target.closest('button,input,textarea,select,label,a')) return
+    if (!dayMenuRef.current) return
+
+    const rect = dayMenuRef.current.getBoundingClientRect()
+    const start = modalPosition ?? { x: rect.left, y: rect.top }
+    const clamped = clampModalPosition(start.x, start.y, rect.width, rect.height)
+
+    modalDragRef.current = {
+      pointerId: event.pointerId,
+      offsetX: event.clientX - clamped.x,
+      offsetY: event.clientY - clamped.y,
+      width: rect.width,
+      height: rect.height,
+    }
+    setModalPosition(clamped)
+    event.currentTarget.setPointerCapture(event.pointerId)
+    event.preventDefault()
+  }
+
+  useEffect(() => {
+    const onPointerMove = (event: PointerEvent) => {
+      const dragging = modalDragRef.current
+      if (!dragging || event.pointerId !== dragging.pointerId) return
+
+      const next = clampModalPosition(
+        event.clientX - dragging.offsetX,
+        event.clientY - dragging.offsetY,
+        dragging.width,
+        dragging.height,
+      )
+      setModalPosition(next)
+    }
+
+    const onPointerUp = (event: PointerEvent) => {
+      if (!modalDragRef.current || event.pointerId !== modalDragRef.current.pointerId) return
+      modalDragRef.current = null
+    }
+
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', onPointerUp)
+    window.addEventListener('pointercancel', onPointerUp)
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', onPointerUp)
+      window.removeEventListener('pointercancel', onPointerUp)
+    }
+  }, [])
+
+  useEffect(() => {
+    const onResize = () => {
+      const menu = dayMenuRef.current
+      if (!menu) return
+      const rect = menu.getBoundingClientRect()
+      setModalPosition((prev) => {
+        if (!prev) return prev
+        return clampModalPosition(prev.x, prev.y, rect.width, rect.height)
+      })
+    }
+
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
 
   const moveDayEditor = (diffDays: number) => {
     const next = shiftDate(dayEditor.date, diffDays)
@@ -540,7 +707,25 @@ export default function App() {
 
     try {
       await ensureGoogleScript()
-      const token = await requestAccessToken(googleSettings.clientId.trim())
+      const clientId = googleSettings.clientId.trim()
+      let token = ''
+      const cached = tokenCacheRef.current
+      if (cached && cached.clientId === clientId && cached.expiresAt > Date.now()) {
+        token = cached.accessToken
+      } else {
+        let issued
+        try {
+          issued = await requestAccessToken(clientId, '')
+        } catch {
+          issued = await requestAccessToken(clientId, 'consent')
+        }
+        tokenCacheRef.current = {
+          clientId,
+          accessToken: issued.accessToken,
+          expiresAt: issued.expiresAt,
+        }
+        token = issued.accessToken
+      }
       const calendarId = googleSettings.calendarId.trim() || 'primary'
 
       const monthEntries = entries.filter(
@@ -621,10 +806,88 @@ export default function App() {
     }
   }
 
+  const syncWithServerRange = async () => {
+    const baseUrl = serverSyncUrl.trim()
+    if (!baseUrl) {
+      setServerSyncMessage('同期サーバーURLを入力してください')
+      return
+    }
+
+    const centerYear = activeMonth.getFullYear()
+    const startYear = centerYear - 1
+    const endYear = centerYear + 1
+
+    setIsServerSyncing(true)
+    setServerSyncMessage(`同期中: ${startYear}年〜${endYear}年`)
+
+    try {
+      const rangeEntries = entries.filter((entry) => {
+        const year = new Date(`${entry.date}T00:00:00`).getFullYear()
+        return year >= startYear && year <= endYear
+      })
+
+      const payload: ServerSyncPayload = {
+        startYear,
+        endYear,
+        entries: rangeEntries,
+      }
+
+      const endpoint = `${baseUrl.replace(/\/$/, '')}/sync-range`
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      if (!response.ok) {
+        const text = await response.text()
+        throw new Error(`HTTP ${response.status}: ${text}`)
+      }
+
+      const data = (await response.json()) as ServerSyncResponse
+      const years = new Set(data.years ?? [])
+      const merged = [
+        ...entries.filter((entry) => {
+          const year = new Date(`${entry.date}T00:00:00`).getFullYear()
+          return year < startYear || year > endYear
+        }),
+        ...data.entries,
+      ]
+
+      saveEntries(merged)
+      setSyncedYears((prev) => Array.from(new Set([...prev, ...Array.from(years)])).sort((a, b) => a - b))
+      setServerSyncMessage(`同期完了: ${startYear}年〜${endYear}年 (${data.entries.length}件)`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '同期に失敗しました'
+      setServerSyncMessage(`エラー: ${message}`)
+    } finally {
+      setIsServerSyncing(false)
+    }
+  }
+
+  useEffect(() => {
+    if (hasAutoSyncedRef.current) return
+    hasAutoSyncedRef.current = true
+    void syncWithServerRange()
+  }, [])
+
   const todayLabel = toISODate(today)
+  const activeYear = activeMonth.getFullYear()
+  const needsYearSync = !syncedYears.includes(activeYear)
   const editorDayEntries = entriesByDate[dayEditor.date] ?? []
+  const dayMenuStyle = modalPosition
+    ? {
+        position: 'fixed' as const,
+        left: `${modalPosition.x}px`,
+        top: `${modalPosition.y}px`,
+        margin: 0,
+      }
+    : undefined
   const isQuickActionActive = (action: string) =>
     editorDayEntries.some((entry) => entry.person === selectedPerson && entry.text === action)
+
+  useEffect(() => {
+    setIsSyncReminderDismissed(false)
+  }, [activeYear])
 
   return (
     <main className="app-shell">
@@ -689,40 +952,60 @@ export default function App() {
             </div>
 
             <label>
-              Google OAuth Client ID
+              同期サーバーURL
               <input
                 type="text"
-                value={googleSettings.clientId}
-                onChange={(event) =>
-                  updateGoogleSettings({
-                    ...googleSettings,
-                    clientId: event.target.value,
-                  })
-                }
-                placeholder="xxxx.apps.googleusercontent.com"
+                value={serverSyncUrl}
+                onChange={(event) => updateServerSyncUrl(event.target.value)}
+                placeholder="/calendar-api"
               />
             </label>
 
-            <label>
-              Calendar ID
-              <input
-                type="text"
-                value={googleSettings.calendarId}
-                onChange={(event) =>
-                  updateGoogleSettings({
-                    ...googleSettings,
-                    calendarId: event.target.value,
-                  })
-                }
-                placeholder="primary"
-              />
-            </label>
-
-            <button className="sync-button" onClick={syncWithGoogle} disabled={isSyncing}>
-              {isSyncing ? '同期中...' : '同期'}
+            <button className="sync-button" onClick={syncWithServerRange} disabled={isServerSyncing}>
+              {isServerSyncing ? '3年分 同期中...' : '前後1年を同期'}
             </button>
 
-            {syncMessage ? <p className="sync-message">{syncMessage}</p> : null}
+            {serverSyncMessage ? <p className="sync-message">{serverSyncMessage}</p> : null}
+
+            <details className="google-sync-panel">
+              <summary>Google同期（必要時のみ）</summary>
+
+              <label>
+                Google OAuth Client ID
+                <input
+                  type="text"
+                  value={googleSettings.clientId}
+                  onChange={(event) =>
+                    updateGoogleSettings({
+                      ...googleSettings,
+                      clientId: event.target.value,
+                    })
+                  }
+                  placeholder="xxxx.apps.googleusercontent.com"
+                />
+              </label>
+
+              <label>
+                Calendar ID
+                <input
+                  type="text"
+                  value={googleSettings.calendarId}
+                  onChange={(event) =>
+                    updateGoogleSettings({
+                      ...googleSettings,
+                      calendarId: event.target.value,
+                    })
+                  }
+                  placeholder="primary"
+                />
+              </label>
+
+              <button className="sync-button" onClick={syncWithGoogle} disabled={isSyncing}>
+                {isSyncing ? '同期中...' : 'Google同期'}
+              </button>
+
+              {syncMessage ? <p className="sync-message">{syncMessage}</p> : null}
+            </details>
           </div>
         ) : null}
       </header>
@@ -740,12 +1023,13 @@ export default function App() {
           {cells.map((date) => {
             const iso = toISODate(date)
             const isCurrentMonth = date.getMonth() === activeMonth.getMonth()
+            const isEditing = dayEditor.isOpen && iso === dayEditor.date
             const dayEntries = entriesByDate[iso] ?? []
 
             return (
               <button
                 key={iso}
-                className={`day-cell ${isCurrentMonth ? '' : 'is-outside'} ${iso === todayLabel ? 'is-today' : ''}`}
+                className={`day-cell ${isCurrentMonth ? '' : 'is-outside'} ${iso === todayLabel ? 'is-today' : ''} ${isEditing ? 'is-editing' : ''}`}
                 onClick={() => openDayEditor(iso)}
               >
                 <span className="day-number">{date.getDate()}</span>
@@ -753,10 +1037,11 @@ export default function App() {
                   {dayEntries.slice(0, 3).map((entry) => (
                     <span
                       key={entry.id}
-                      className={`line-tag ${entry.person}`}
+                      className={`line-tag ${entry.person} ${entry.category === 'free' ? 'is-free' : 'is-quick'}`}
                       style={
                         isQuickEntry(entry)
                           ? {
+                              color: entry.color ?? colorSettings[actionKey(entry.person, entry.text)],
                               borderColor: entry.color ?? colorSettings[actionKey(entry.person, entry.text)],
                               backgroundColor: hexToRgba(
                                 entry.color ?? colorSettings[actionKey(entry.person, entry.text)],
@@ -765,6 +1050,7 @@ export default function App() {
                             }
                           : entry.color
                             ? {
+                                color: entry.color,
                                 borderColor: entry.color,
                                 backgroundColor: hexToRgba(entry.color, 0.18),
                               }
@@ -781,10 +1067,29 @@ export default function App() {
         </div>
       </section>
 
+      {needsYearSync && !isSyncReminderDismissed ? (
+        <div className="sync-reminder-backdrop" role="dialog" aria-modal="true" aria-label="未同期の通知">
+          <div className="sync-reminder-modal">
+            <div className="sync-reminder-head">
+              <p>未同期の通知</p>
+              <button className="close-button" onClick={() => setIsSyncReminderDismissed(true)}>
+                ×
+              </button>
+            </div>
+            <p>{activeYear}年は未同期です。</p>
+            <p>前後1年を同期してから編集してください。</p>
+            <button className="sync-button" onClick={syncWithServerRange} disabled={isServerSyncing}>
+              {isServerSyncing ? '3年分 同期中...' : '前後1年を同期'}
+            </button>
+            {serverSyncMessage ? <p className="sync-message">{serverSyncMessage}</p> : null}
+          </div>
+        </div>
+      ) : null}
+
       {dayEditor.isOpen ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true">
-          <div className="day-menu">
-            <div className="day-menu-head">
+          <div className="day-menu" ref={dayMenuRef} style={dayMenuStyle}>
+            <div className="day-menu-head" onPointerDown={onDayMenuHeadPointerDown}>
               <div className="day-nav">
                 <button className="day-move-button" onClick={() => moveDayEditor(-1)}>
                   前日
@@ -794,7 +1099,7 @@ export default function App() {
                   翌日
                 </button>
               </div>
-              <button className="close-button" onClick={() => setDayEditor((prev) => ({ ...prev, isOpen: false }))}>
+              <button className="close-button" onClick={closeDayEditor}>
                 ×
               </button>
             </div>
@@ -806,6 +1111,7 @@ export default function App() {
                   className={`quick-button ${isQuickActionActive(action) ? 'is-active' : ''}`}
                   onClick={() => applyQuickAction(action)}
                   style={{
+                    color: colorSettings[actionKey(selectedPerson, action)],
                     borderColor: colorSettings[actionKey(selectedPerson, action)],
                     backgroundColor: hexToRgba(
                       colorSettings[actionKey(selectedPerson, action)],

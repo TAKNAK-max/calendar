@@ -1,0 +1,134 @@
+import express from 'express'
+import cors from 'cors'
+import fs from 'node:fs/promises'
+import path from 'node:path'
+
+const app = express()
+const port = Number(process.env.PORT ?? 8787)
+const dataDir = process.env.DATA_DIR ?? '/data'
+
+app.use(cors())
+app.use(express.json({ limit: '2mb' }))
+
+function yearFromDate(dateText) {
+  const date = new Date(`${dateText}T00:00:00`)
+  if (Number.isNaN(date.getTime())) return null
+  return date.getFullYear()
+}
+
+function sanitizeEntry(entry) {
+  if (!entry || typeof entry !== 'object') return null
+  if (typeof entry.id !== 'string' || typeof entry.date !== 'string' || typeof entry.text !== 'string') return null
+  if (entry.person !== 'tarchin' && entry.person !== 'yacchin') return null
+  if (entry.category !== 'quick' && entry.category !== 'free') return null
+
+  const year = yearFromDate(entry.date)
+  if (year === null) return null
+
+  return {
+    id: entry.id,
+    date: entry.date,
+    text: entry.text,
+    person: entry.person,
+    category: entry.category,
+    color: typeof entry.color === 'string' ? entry.color : undefined,
+    googleEventId: typeof entry.googleEventId === 'string' ? entry.googleEventId : undefined,
+  }
+}
+
+function filePathForYear(year) {
+  return path.join(dataDir, `${year}.json`)
+}
+
+async function readYear(year) {
+  const filePath = filePathForYear(year)
+  try {
+    const raw = await fs.readFile(filePath, 'utf8')
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.map(sanitizeEntry).filter(Boolean)
+  } catch (error) {
+    if (error && typeof error === 'object' && error.code === 'ENOENT') return []
+    throw error
+  }
+}
+
+async function writeYear(year, entries) {
+  const filePath = filePathForYear(year)
+  await fs.mkdir(dataDir, { recursive: true })
+  const sorted = [...entries].sort((a, b) => {
+    if (a.date === b.date) return a.id.localeCompare(b.id)
+    return a.date.localeCompare(b.date)
+  })
+  await fs.writeFile(filePath, JSON.stringify(sorted, null, 2), 'utf8')
+}
+
+app.get('/health', (_req, res) => {
+  res.json({ ok: true })
+})
+
+app.post('/sync-range', async (req, res) => {
+  try {
+    const { startYear, endYear, entries } = req.body ?? {}
+    if (!Number.isInteger(startYear) || !Number.isInteger(endYear) || startYear > endYear) {
+      res.status(400).json({ error: 'startYear/endYear が不正です' })
+      return
+    }
+    if (endYear - startYear > 5) {
+      res.status(400).json({ error: '同期範囲は最大6年です' })
+      return
+    }
+    if (!Array.isArray(entries)) {
+      res.status(400).json({ error: 'entries は配列で指定してください' })
+      return
+    }
+
+    const years = []
+    for (let year = startYear; year <= endYear; year += 1) years.push(year)
+
+    const serverEntriesById = new Map()
+    for (const year of years) {
+      const yearEntries = await readYear(year)
+      for (const item of yearEntries) {
+        serverEntriesById.set(item.id, item)
+      }
+    }
+
+    const mergedById = new Map(serverEntriesById)
+    for (const rawEntry of entries) {
+      const item = sanitizeEntry(rawEntry)
+      if (!item) continue
+      const year = yearFromDate(item.date)
+      if (year === null || year < startYear || year > endYear) continue
+      mergedById.set(item.id, item)
+    }
+
+    const byYear = new Map(years.map((year) => [year, []]))
+    for (const item of mergedById.values()) {
+      const year = yearFromDate(item.date)
+      if (year === null || year < startYear || year > endYear) continue
+      byYear.get(year).push(item)
+    }
+
+    for (const year of years) {
+      await writeYear(year, byYear.get(year))
+    }
+
+    const mergedEntries = Array.from(mergedById.values()).sort((a, b) => {
+      if (a.date === b.date) return a.id.localeCompare(b.id)
+      return a.date.localeCompare(b.date)
+    })
+
+    res.json({
+      years,
+      entries: mergedEntries,
+    })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: 'internal_error' })
+  }
+})
+
+app.listen(port, () => {
+  console.log(`calendar-sync-server listening on :${port}`)
+})

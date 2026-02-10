@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "release": "tsc && vite build --outDir calendar",
     "preview": "vite preview"
   },
   "devDependencies": {
