@@ -21,11 +21,17 @@ type ServerSyncPayload = {
   startYear: number
   endYear: number
   entries: CalendarEntry[]
+  removedIds: string[]
 }
 
 type ServerSyncResponse = {
   years: number[]
   entries: CalendarEntry[]
+  removedIds: string[]
+}
+
+type ServerClearResponse = {
+  deletedFiles: number
 }
 
 type ColorSettings = Record<string, string>
@@ -104,6 +110,7 @@ const STORAGE_PERSON = 'futari-calendar-person'
 const STORAGE_GOOGLE = 'futari-calendar-google'
 const STORAGE_COLORS = 'futari-calendar-colors'
 const STORAGE_SYNC_URL = 'futari-calendar-sync-url'
+const STORAGE_REMOVED_IDS = 'futari-calendar-removed-ids'
 const APP_SOURCE = 'futari-calendar-web'
 const DEFAULT_GOOGLE_CLIENT_ID = '719425138729-jo1krmiqsvlopbhc3ibome39degm61d9.apps.googleusercontent.com'
 const DEFAULT_SYNC_URL = '/calendar-api'
@@ -184,6 +191,18 @@ function loadSyncUrl(): string {
   if (!raw) return DEFAULT_SYNC_URL
   const normalized = raw.trim()
   return normalized || DEFAULT_SYNC_URL
+}
+
+function loadRemovedIds(): string[] {
+  const raw = localStorage.getItem(STORAGE_REMOVED_IDS)
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((id) => typeof id === 'string')
+  } catch {
+    return []
+  }
 }
 
 function actionKey(person: Person, action: string): string {
@@ -366,7 +385,9 @@ export default function App() {
   const [serverSyncUrl, setServerSyncUrl] = useState(() => loadSyncUrl())
   const [serverSyncMessage, setServerSyncMessage] = useState('')
   const [isServerSyncing, setIsServerSyncing] = useState(false)
+  const [isServerClearing, setIsServerClearing] = useState(false)
   const [syncedYears, setSyncedYears] = useState<number[]>([])
+  const [removedEntryIds, setRemovedEntryIds] = useState<string[]>(() => loadRemovedIds())
   const [isSyncReminderDismissed, setIsSyncReminderDismissed] = useState(false)
   const [modalPosition, setModalPosition] = useState<ModalPosition | null>(null)
   const tokenCacheRef = useRef<TokenCache | null>(null)
@@ -395,6 +416,25 @@ export default function App() {
     )
     setEntries(normalized)
     localStorage.setItem(STORAGE_ENTRIES, JSON.stringify(normalized))
+  }
+
+  const markEntriesRemoved = (ids: string[]) => {
+    if (ids.length === 0) return
+    setRemovedEntryIds((prev) => {
+      const next = Array.from(new Set([...prev, ...ids]))
+      localStorage.setItem(STORAGE_REMOVED_IDS, JSON.stringify(next))
+      return next
+    })
+  }
+
+  const clearRemovedEntries = (ids: string[]) => {
+    if (ids.length === 0) return
+    setRemovedEntryIds((prev) => {
+      const removedSet = new Set(ids)
+      const next = prev.filter((id) => !removedSet.has(id))
+      localStorage.setItem(STORAGE_REMOVED_IDS, JSON.stringify(next))
+      return next
+    })
   }
 
   const updateGoogleSettings = (nextSettings: GoogleSettings) => {
@@ -537,9 +577,16 @@ export default function App() {
       )
 
       let nextEntries: CalendarEntry[]
+      let removedIds: string[] = []
 
       if (selectedPerson === 'tarchin' && text === TARCHIN_VACATION) {
         if (exists) {
+          removedIds = prev
+            .filter(
+              (entry) =>
+                entry.date === dayEditor.date && entry.person === 'tarchin' && entry.text === TARCHIN_VACATION,
+            )
+            .map((entry) => entry.id)
           nextEntries = prev.filter(
             (entry) => !(entry.date === dayEditor.date && entry.person === 'tarchin' && entry.text === TARCHIN_VACATION),
           )
@@ -563,10 +610,19 @@ export default function App() {
         if (selectedPerson === 'yacchin') {
           const yacchinActions = new Set(QUICK_ACTIONS.yacchin)
           if (exists) {
+            removedIds = prev
+              .filter((entry) => entry.date === dayEditor.date && entry.person === 'yacchin' && entry.text === text)
+              .map((entry) => entry.id)
             nextEntries = prev.filter(
               (entry) => !(entry.date === dayEditor.date && entry.person === 'yacchin' && entry.text === text),
             )
           } else {
+            removedIds = prev
+              .filter(
+                (entry) =>
+                  entry.date === dayEditor.date && entry.person === 'yacchin' && yacchinActions.has(entry.text),
+              )
+              .map((entry) => entry.id)
             const withoutOtherShift = prev.filter(
               (entry) =>
                 !(
@@ -588,6 +644,9 @@ export default function App() {
             ]
           }
         } else if (exists) {
+          removedIds = prev
+            .filter((entry) => entry.date === dayEditor.date && entry.person === selectedPerson && entry.text === text)
+            .map((entry) => entry.id)
           nextEntries = prev.filter(
             (entry) => !(entry.date === dayEditor.date && entry.person === selectedPerson && entry.text === text),
           )
@@ -606,6 +665,7 @@ export default function App() {
         }
       }
 
+      markEntriesRemoved(removedIds)
       localStorage.setItem(STORAGE_ENTRIES, JSON.stringify(nextEntries))
       return nextEntries
     })
@@ -678,6 +738,7 @@ export default function App() {
     const targetRow = dayEditor.inputs.find((row) => row.rowId === rowId)
     if (!targetRow?.entryId) return
 
+    markEntriesRemoved([targetRow.entryId])
     saveEntries(entries.filter((entry) => entry.id !== targetRow.entryId))
     setDayEditor((prev) => ({
       ...prev,
@@ -830,6 +891,7 @@ export default function App() {
         startYear,
         endYear,
         entries: rangeEntries,
+        removedIds: removedEntryIds,
       }
 
       const endpoint = `${baseUrl.replace(/\/$/, '')}/sync-range`
@@ -854,6 +916,7 @@ export default function App() {
       ]
 
       saveEntries(merged)
+      clearRemovedEntries(data.removedIds ?? [])
       setSyncedYears((prev) => Array.from(new Set([...prev, ...Array.from(years)])).sort((a, b) => a - b))
       setServerSyncMessage(`同期完了: ${startYear}年〜${endYear}年 (${data.entries.length}件)`)
     } catch (error) {
@@ -861,6 +924,36 @@ export default function App() {
       setServerSyncMessage(`エラー: ${message}`)
     } finally {
       setIsServerSyncing(false)
+    }
+  }
+
+  const clearServerEntries = async () => {
+    const baseUrl = serverSyncUrl.trim()
+    if (!baseUrl) {
+      setServerSyncMessage('同期サーバーURLを入力してください')
+      return
+    }
+
+    const ok = window.confirm('サーバー上の予定データを全て削除します。続行しますか？')
+    if (!ok) return
+
+    setIsServerClearing(true)
+    setServerSyncMessage('サーバー予定を削除中...')
+    try {
+      const endpoint = `${baseUrl.replace(/\/$/, '')}/clear-all`
+      const response = await fetch(endpoint, { method: 'POST' })
+      if (!response.ok) {
+        const text = await response.text()
+        throw new Error(`HTTP ${response.status}: ${text}`)
+      }
+      const data = (await response.json()) as ServerClearResponse
+      setSyncedYears([])
+      setServerSyncMessage(`サーバー予定を削除しました（${data.deletedFiles}ファイル）`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '削除に失敗しました'
+      setServerSyncMessage(`エラー: ${message}`)
+    } finally {
+      setIsServerClearing(false)
     }
   }
 
@@ -966,6 +1059,13 @@ export default function App() {
             </button>
 
             {serverSyncMessage ? <p className="sync-message">{serverSyncMessage}</p> : null}
+
+            <details className="developer-panel">
+              <summary>開発者用</summary>
+              <button className="sync-button" onClick={clearServerEntries} disabled={isServerClearing}>
+                {isServerClearing ? '削除中...' : 'サーバー予定を全削除'}
+              </button>
+            </details>
 
             <details className="google-sync-panel">
               <summary>Google同期（必要時のみ）</summary>

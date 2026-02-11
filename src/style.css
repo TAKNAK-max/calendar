@@ -195,6 +195,7 @@ input {
   padding: 0.3rem 0.5rem;
 }
 
+.developer-panel,
 .google-sync-panel {
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -203,6 +204,7 @@ input {
   gap: 0.45rem;
 }
 
+.developer-panel summary,
 .google-sync-panel summary {
   cursor: pointer;
   color: var(--ink-soft);

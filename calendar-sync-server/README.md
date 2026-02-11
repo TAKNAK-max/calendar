@@ -10,9 +10,14 @@
     - `startYear`: number
     - `endYear`: number
     - `entries`: `CalendarEntry[]`
+    - `removedIds`: string[]
   - response:
     - `years`: number[]
     - `entries`: `CalendarEntry[]`
+    - `removedIds`: string[]
+- `POST /clear-all`
+  - response:
+    - `deletedFiles`: number
 
 ## ローカル起動
 

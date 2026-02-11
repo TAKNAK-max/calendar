@@ -69,7 +69,7 @@ app.get('/health', (_req, res) => {
 
 app.post('/sync-range', async (req, res) => {
   try {
-    const { startYear, endYear, entries } = req.body ?? {}
+    const { startYear, endYear, entries, removedIds } = req.body ?? {}
     if (!Number.isInteger(startYear) || !Number.isInteger(endYear) || startYear > endYear) {
       res.status(400).json({ error: 'startYear/endYear が不正です' })
       return
@@ -80,6 +80,10 @@ app.post('/sync-range', async (req, res) => {
     }
     if (!Array.isArray(entries)) {
       res.status(400).json({ error: 'entries は配列で指定してください' })
+      return
+    }
+    if (!Array.isArray(removedIds)) {
+      res.status(400).json({ error: 'removedIds は配列で指定してください' })
       return
     }
 
@@ -95,6 +99,11 @@ app.post('/sync-range', async (req, res) => {
     }
 
     const mergedById = new Map(serverEntriesById)
+    const validRemovedIds = removedIds.filter((id) => typeof id === 'string')
+    for (const id of validRemovedIds) {
+      mergedById.delete(id)
+    }
+
     for (const rawEntry of entries) {
       const item = sanitizeEntry(rawEntry)
       if (!item) continue
@@ -122,7 +131,25 @@ app.post('/sync-range', async (req, res) => {
     res.json({
       years,
       entries: mergedEntries,
+      removedIds: validRemovedIds,
     })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: 'internal_error' })
+  }
+})
+
+app.post('/clear-all', async (_req, res) => {
+  try {
+    await fs.mkdir(dataDir, { recursive: true })
+    const files = await fs.readdir(dataDir)
+    let deletedFiles = 0
+    for (const file of files) {
+      if (!file.endsWith('.json')) continue
+      await fs.rm(path.join(dataDir, file), { force: true })
+      deletedFiles += 1
+    }
+    res.json({ deletedFiles })
   } catch (error) {
     console.error(error)
     res.status(500).json({ error: 'internal_error' })
