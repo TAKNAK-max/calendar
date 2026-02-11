@@ -34,6 +34,17 @@ type ServerClearResponse = {
   deletedFiles: number
 }
 
+type ConfirmModalKind = 'warning' | 'info' | 'success' | 'error'
+
+type ConfirmModalState = {
+  kind: ConfirmModalKind
+  title: string
+  message: string
+  confirmLabel: string
+  cancelLabel: string
+  onConfirm: () => Promise<void> | void
+}
+
 type ColorSettings = Record<string, string>
 
 type DayEditor = {
@@ -372,6 +383,13 @@ function googleEventPayload(entry: CalendarEntry) {
   }
 }
 
+function modalIconByKind(kind: ConfirmModalKind): string {
+  if (kind === 'warning') return '⚠'
+  if (kind === 'success') return '✓'
+  if (kind === 'error') return '⛔'
+  return 'ℹ'
+}
+
 export default function App() {
   const [activeMonth, setActiveMonth] = useState(initialMonth)
   const [entries, setEntries] = useState<CalendarEntry[]>(() => loadEntries())
@@ -387,7 +405,8 @@ export default function App() {
   const [isServerSyncing, setIsServerSyncing] = useState(false)
   const [isServerClearing, setIsServerClearing] = useState(false)
   const [syncedYears, setSyncedYears] = useState<number[]>([])
-  const [removedEntryIds, setRemovedEntryIds] = useState<string[]>(() => loadRemovedIds())
+  const [confirmModal, setConfirmModal] = useState<ConfirmModalState | null>(null)
+  const [, setRemovedEntryIds] = useState<string[]>(() => loadRemovedIds())
   const [isSyncReminderDismissed, setIsSyncReminderDismissed] = useState(false)
   const [modalPosition, setModalPosition] = useState<ModalPosition | null>(null)
   const tokenCacheRef = useRef<TokenCache | null>(null)
@@ -450,6 +469,48 @@ export default function App() {
     localStorage.setItem(STORAGE_SYNC_URL, url)
   }
 
+  const postServerSync = async (startYear: number, endYear: number, targetEntries: CalendarEntry[]) => {
+    const baseUrl = serverSyncUrl.trim()
+    const removedIdsSnapshot = loadRemovedIds()
+    const payload: ServerSyncPayload = {
+      startYear,
+      endYear,
+      entries: targetEntries,
+      removedIds: removedIdsSnapshot,
+    }
+
+    const endpoint = `${baseUrl.replace(/\/$/, '')}/sync-range`
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!response.ok) {
+      const text = await response.text()
+      throw new Error(`HTTP ${response.status}: ${text}`)
+    }
+    return (await response.json()) as ServerSyncResponse
+  }
+
+  const syncSingleDayWithServer = async (date: string) => {
+    const baseUrl = serverSyncUrl.trim()
+    if (!baseUrl || isServerSyncing || isServerClearing) return
+
+    const year = new Date(`${date}T00:00:00`).getFullYear()
+    if (Number.isNaN(year)) return
+
+    try {
+      const snapshot = loadEntries()
+      const dayEntries = snapshot.filter((entry) => entry.date === date)
+      const data = await postServerSync(year, year, dayEntries)
+      clearRemovedEntries(data.removedIds ?? [])
+      setSyncedYears((prev) => Array.from(new Set([...prev, year])).sort((a, b) => a - b))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '日次同期に失敗しました'
+      setServerSyncMessage(`エラー: ${message}`)
+    }
+  }
+
   const changePerson = (person: Person) => {
     setSelectedPerson(person)
     setActiveColorTarget(null)
@@ -484,10 +545,14 @@ export default function App() {
     })
   }
 
-  const closeDayEditor = () => {
+  const closeDayEditor = (syncCurrentDay = true) => {
+    const targetDate = dayEditor.date
     modalDragRef.current = null
     setModalPosition(null)
     setDayEditor((prev) => ({ ...prev, isOpen: false }))
+    if (syncCurrentDay) {
+      void syncSingleDayWithServer(targetDate)
+    }
   }
 
   const clampModalPosition = (x: number, y: number, width: number, height: number): ModalPosition => {
@@ -566,6 +631,7 @@ export default function App() {
   }, [])
 
   const moveDayEditor = (diffDays: number) => {
+    void syncSingleDayWithServer(dayEditor.date)
     const next = shiftDate(dayEditor.date, diffDays)
     openDayEditor(next)
   }
@@ -887,25 +953,7 @@ export default function App() {
         return year >= startYear && year <= endYear
       })
 
-      const payload: ServerSyncPayload = {
-        startYear,
-        endYear,
-        entries: rangeEntries,
-        removedIds: removedEntryIds,
-      }
-
-      const endpoint = `${baseUrl.replace(/\/$/, '')}/sync-range`
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-      if (!response.ok) {
-        const text = await response.text()
-        throw new Error(`HTTP ${response.status}: ${text}`)
-      }
-
-      const data = (await response.json()) as ServerSyncResponse
+      const data = await postServerSync(startYear, endYear, rangeEntries)
       const years = new Set(data.years ?? [])
       const merged = [
         ...entries.filter((entry) => {
@@ -927,15 +975,12 @@ export default function App() {
     }
   }
 
-  const clearServerEntries = async () => {
+  const executeClearServerEntries = async () => {
     const baseUrl = serverSyncUrl.trim()
     if (!baseUrl) {
       setServerSyncMessage('同期サーバーURLを入力してください')
       return
     }
-
-    const ok = window.confirm('サーバー上の予定データを全て削除します。続行しますか？')
-    if (!ok) return
 
     setIsServerClearing(true)
     setServerSyncMessage('サーバー予定を削除中...')
@@ -947,14 +992,31 @@ export default function App() {
         throw new Error(`HTTP ${response.status}: ${text}`)
       }
       const data = (await response.json()) as ServerClearResponse
+      closeDayEditor(false)
+      saveEntries([])
+      setRemovedEntryIds([])
+      localStorage.setItem(STORAGE_REMOVED_IDS, JSON.stringify([]))
       setSyncedYears([])
-      setServerSyncMessage(`サーバー予定を削除しました（${data.deletedFiles}ファイル）`)
+      setServerSyncMessage(`サーバーとローカルの予定を削除しました（${data.deletedFiles}ファイル）`)
     } catch (error) {
       const message = error instanceof Error ? error.message : '削除に失敗しました'
       setServerSyncMessage(`エラー: ${message}`)
     } finally {
       setIsServerClearing(false)
     }
+  }
+
+  const clearServerEntries = () => {
+    setConfirmModal({
+      kind: 'warning',
+      title: '予定の全削除',
+      message: 'サーバーとローカルの予定を全て削除します。続行しますか？',
+      confirmLabel: 'OK',
+      cancelLabel: 'キャンセル',
+      onConfirm: async () => {
+        await executeClearServerEntries()
+      },
+    })
   }
 
   useEffect(() => {
@@ -1168,8 +1230,14 @@ export default function App() {
       </section>
 
       {needsYearSync && !isSyncReminderDismissed ? (
-        <div className="sync-reminder-backdrop" role="dialog" aria-modal="true" aria-label="未同期の通知">
-          <div className="sync-reminder-modal">
+        <div
+          className="sync-reminder-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="未同期の通知"
+          onClick={() => setIsSyncReminderDismissed(true)}
+        >
+          <div className="sync-reminder-modal" onClick={(event) => event.stopPropagation()}>
             <div className="sync-reminder-head">
               <p>未同期の通知</p>
               <button className="close-button" onClick={() => setIsSyncReminderDismissed(true)}>
@@ -1186,9 +1254,36 @@ export default function App() {
         </div>
       ) : null}
 
+      {confirmModal ? (
+        <div className="confirm-modal-backdrop" role="dialog" aria-modal="true" onClick={() => setConfirmModal(null)}>
+          <div className="confirm-modal" onClick={(event) => event.stopPropagation()}>
+            <div className={`confirm-modal-icon ${confirmModal.kind}`} aria-hidden="true">
+              {modalIconByKind(confirmModal.kind)}
+            </div>
+            <h3>{confirmModal.title}</h3>
+            <p>{confirmModal.message}</p>
+            <div className="confirm-modal-actions">
+              <button className="nav-button" onClick={() => setConfirmModal(null)}>
+                {confirmModal.cancelLabel}
+              </button>
+              <button
+                className="sync-button"
+                onClick={async () => {
+                  const confirmAction = confirmModal.onConfirm
+                  setConfirmModal(null)
+                  await confirmAction()
+                }}
+              >
+                {confirmModal.confirmLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {dayEditor.isOpen ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
-          <div className="day-menu" ref={dayMenuRef} style={dayMenuStyle}>
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => closeDayEditor()}>
+          <div className="day-menu" ref={dayMenuRef} style={dayMenuStyle} onClick={(event) => event.stopPropagation()}>
             <div className="day-menu-head" onPointerDown={onDayMenuHeadPointerDown}>
               <div className="day-nav">
                 <button className="day-move-button" onClick={() => moveDayEditor(-1)}>
@@ -1199,7 +1294,7 @@ export default function App() {
                   翌日
                 </button>
               </div>
-              <button className="close-button" onClick={closeDayEditor}>
+              <button className="close-button" onClick={() => closeDayEditor()}>
                 ×
               </button>
             </div>

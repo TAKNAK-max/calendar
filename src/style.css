@@ -254,6 +254,66 @@ input {
   gap: 0.45rem;
 }
 
+.confirm-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 18;
+  display: grid;
+  place-items: center;
+  background: rgba(8, 14, 28, 0.42);
+  padding: 0.75rem;
+}
+
+.confirm-modal {
+  width: min(420px, 100%);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 0.85rem;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.confirm-modal-icon {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+}
+
+.confirm-modal-icon.warning {
+  background: #fff0d8;
+  color: #8a4f00;
+}
+
+.confirm-modal-icon.info {
+  background: #e7f1ff;
+  color: #1e5ea8;
+}
+
+.confirm-modal-icon.success {
+  background: #e4f6ea;
+  color: #1e7a3e;
+}
+
+.confirm-modal-icon.error {
+  background: #fde8e8;
+  color: #8a1f1f;
+}
+
+.confirm-modal h3,
+.confirm-modal p {
+  margin: 0;
+}
+
+.confirm-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.45rem;
+}
+
 .calendar-area {
   min-height: 0;
   overflow: hidden;

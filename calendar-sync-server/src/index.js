@@ -69,7 +69,7 @@ app.get('/health', (_req, res) => {
 
 app.post('/sync-range', async (req, res) => {
   try {
-    const { startYear, endYear, entries, removedIds } = req.body ?? {}
+    const { startYear, endYear, entries, removedIds = [] } = req.body ?? {}
     if (!Number.isInteger(startYear) || !Number.isInteger(endYear) || startYear > endYear) {
       res.status(400).json({ error: 'startYear/endYear が不正です' })
       return
