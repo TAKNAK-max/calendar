@@ -278,6 +278,25 @@ function shiftDate(date: string, diffDays: number): string {
   return toISODate(d)
 }
 
+function weekdayLabel(date: string): string {
+  const d = new Date(`${date}T00:00:00`)
+  if (Number.isNaN(d.getTime())) return ''
+  return WEEK_LABELS[d.getDay()]
+}
+
+function createId(): string {
+  const cryptoApi = globalThis.crypto
+  if (cryptoApi && typeof cryptoApi.randomUUID === 'function') {
+    return cryptoApi.randomUUID()
+  }
+  if (cryptoApi && typeof cryptoApi.getRandomValues === 'function') {
+    const bytes = new Uint8Array(16)
+    cryptoApi.getRandomValues(bytes)
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`
+}
+
 function ensureGoogleScript(): Promise<void> {
   if (window.google?.accounts?.oauth2) return Promise.resolve()
 
@@ -414,7 +433,7 @@ export default function App() {
   const [dayEditor, setDayEditor] = useState<DayEditor>({
     isOpen: false,
     date: toISODate(today),
-    inputs: [{ rowId: crypto.randomUUID(), value: '', color: DEFAULT_FREE_TEXT_COLOR }],
+    inputs: [{ rowId: createId(), value: '', color: DEFAULT_FREE_TEXT_COLOR }],
   })
   const dayMenuRef = useRef<HTMLDivElement | null>(null)
   const modalDragRef = useRef<ModalDragState | null>(null)
@@ -529,7 +548,7 @@ export default function App() {
           !isQuickEntry(entry),
       )
       .map((entry) => ({
-        rowId: crypto.randomUUID(),
+        rowId: createId(),
         value: entry.text,
         color: entry.color ?? DEFAULT_FREE_TEXT_COLOR,
         entryId: entry.id,
@@ -541,7 +560,7 @@ export default function App() {
       inputs:
         existingRows.length > 0
           ? existingRows
-          : [{ rowId: crypto.randomUUID(), value: '', color: DEFAULT_FREE_TEXT_COLOR }],
+          : [{ rowId: createId(), value: '', color: DEFAULT_FREE_TEXT_COLOR }],
     })
   }
 
@@ -663,7 +682,7 @@ export default function App() {
           nextEntries = [
             ...withoutVacation,
             {
-              id: crypto.randomUUID(),
+              id: createId(),
               date: dayEditor.date,
               text: TARCHIN_VACATION,
               person: 'tarchin',
@@ -700,7 +719,7 @@ export default function App() {
             nextEntries = [
               ...withoutOtherShift,
               {
-                id: crypto.randomUUID(),
+                id: createId(),
                 date: dayEditor.date,
                 text,
                 person: 'yacchin',
@@ -720,7 +739,7 @@ export default function App() {
           nextEntries = [
             ...prev,
             {
-              id: crypto.randomUUID(),
+              id: createId(),
               date: dayEditor.date,
               text,
               person: selectedPerson,
@@ -740,7 +759,7 @@ export default function App() {
   const addInputBox = () => {
     setDayEditor((prev) => ({
       ...prev,
-      inputs: [...prev.inputs, { rowId: crypto.randomUUID(), value: '', color: DEFAULT_FREE_TEXT_COLOR }],
+      inputs: [...prev.inputs, { rowId: createId(), value: '', color: DEFAULT_FREE_TEXT_COLOR }],
     }))
   }
 
@@ -783,7 +802,7 @@ export default function App() {
     if (!trimmed) return
 
     const newEntry: CalendarEntry = {
-      id: crypto.randomUUID(),
+      id: createId(),
       date: dayEditor.date,
       text: trimmed,
       person: selectedPerson,
@@ -1289,7 +1308,7 @@ export default function App() {
                 <button className="day-move-button" onClick={() => moveDayEditor(-1)}>
                   前日
                 </button>
-                <h2>{dayEditor.date}</h2>
+                <h2>{`${dayEditor.date}（${weekdayLabel(dayEditor.date)}）`}</h2>
                 <button className="day-move-button" onClick={() => moveDayEditor(1)}>
                   翌日
                 </button>
