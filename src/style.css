@@ -559,6 +559,85 @@ input {
   padding: 0.2rem 0.7rem;
 }
 
+.auth-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 25;
+  display: grid;
+  place-items: center;
+  padding: 0.75rem;
+  background:
+    radial-gradient(circle at 90% 0%, #ffd8c4 0%, transparent 26%),
+    linear-gradient(180deg, #fff3e5 0%, #f5f8ff 100%);
+}
+
+.auth-card {
+  width: min(420px, 100%);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 1.2rem;
+  display: grid;
+  gap: 0.7rem;
+}
+
+.auth-card h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.auth-card p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+}
+
+.auth-error {
+  margin: 0;
+  color: #8a1f1f;
+  background: #fde8e8;
+  border: 1px solid #f0c2c2;
+  border-radius: 8px;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.84rem;
+}
+
+.auth-input {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  min-height: 2.4rem;
+  padding: 0.35rem 0.6rem;
+  font: inherit;
+  width: 100%;
+}
+
+.auth-submit {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink-strong);
+  border-radius: 10px;
+  min-height: 2.4rem;
+  font-weight: 700;
+  font: inherit;
+  cursor: pointer;
+}
+
+.auth-blocked {
+  text-align: center;
+}
+
+.auth-blocked p {
+  color: #8a1f1f;
+}
+
+.auth-loading {
+  text-align: center;
+}
+
+.auth-loading p {
+  color: var(--ink-soft);
+}
+
 @media (min-width: 768px) {
   .app-shell {
     max-width: 1100px;

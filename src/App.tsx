@@ -45,6 +45,8 @@ type ConfirmModalState = {
   onConfirm: () => Promise<void> | void
 }
 
+type AuthState = 'checking' | 'need_key' | 'blocked' | 'authenticated'
+
 type ColorSettings = Record<string, string>
 
 type DayEditor = {
@@ -116,6 +118,7 @@ const LEGACY_QUICK_TEXT_MAP: Record<string, string> = {
   遅番: '遅',
 }
 
+const STORAGE_API_KEY = 'futari-calendar-api-key'
 const STORAGE_ENTRIES = 'futari-calendar-entries'
 const STORAGE_PERSON = 'futari-calendar-person'
 const STORAGE_GOOGLE = 'futari-calendar-google'
@@ -410,6 +413,10 @@ function modalIconByKind(kind: ConfirmModalKind): string {
 }
 
 export default function App() {
+  const [authState, setAuthState] = useState<AuthState>('checking')
+  const [apiKeyInput, setApiKeyInput] = useState('')
+  const [authError, setAuthError] = useState('')
+  const [authBlockedUntil, setAuthBlockedUntil] = useState<number | null>(null)
   const [activeMonth, setActiveMonth] = useState(initialMonth)
   const [entries, setEntries] = useState<CalendarEntry[]>(() => loadEntries())
   const [selectedPerson, setSelectedPerson] = useState<Person>(() => loadPerson())
@@ -501,7 +508,7 @@ export default function App() {
     const endpoint = `${baseUrl.replace(/\/$/, '')}/sync-range`
     const response = await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': localStorage.getItem(STORAGE_API_KEY) ?? '' },
       body: JSON.stringify(payload),
     })
     if (!response.ok) {
@@ -1005,7 +1012,7 @@ export default function App() {
     setServerSyncMessage('サーバー予定を削除中...')
     try {
       const endpoint = `${baseUrl.replace(/\/$/, '')}/clear-all`
-      const response = await fetch(endpoint, { method: 'POST' })
+      const response = await fetch(endpoint, { method: 'POST', headers: { 'X-API-Key': localStorage.getItem(STORAGE_API_KEY) ?? '' } })
       if (!response.ok) {
         const text = await response.text()
         throw new Error(`HTTP ${response.status}: ${text}`)
@@ -1039,9 +1046,39 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (hasAutoSyncedRef.current) return
-    hasAutoSyncedRef.current = true
-    void syncWithServerRange()
+    const storedKey = localStorage.getItem(STORAGE_API_KEY) ?? ''
+    if (!storedKey) {
+      setAuthState('need_key')
+      return
+    }
+
+    const baseUrl = serverSyncUrl.trim() || DEFAULT_SYNC_URL
+    const verifyEndpoint = `${baseUrl.replace(/\/$/, '')}/verify-key`
+    fetch(verifyEndpoint, { headers: { 'X-API-Key': storedKey } })
+      .then((res) => {
+        if (res.ok) {
+          setAuthState('authenticated')
+          if (!hasAutoSyncedRef.current) {
+            hasAutoSyncedRef.current = true
+            void syncWithServerRange()
+          }
+        } else if (res.status === 429) {
+          return res.json().then((data: { blockedUntil?: number }) => {
+            setAuthBlockedUntil(data.blockedUntil ?? null)
+            setAuthState('blocked')
+          })
+        } else {
+          localStorage.removeItem(STORAGE_API_KEY)
+          setAuthState('need_key')
+        }
+      })
+      .catch(() => {
+        setAuthState('authenticated')
+        if (!hasAutoSyncedRef.current) {
+          hasAutoSyncedRef.current = true
+          void syncWithServerRange()
+        }
+      })
   }, [])
 
   const todayLabel = toISODate(today)
@@ -1062,6 +1099,86 @@ export default function App() {
   useEffect(() => {
     setIsSyncReminderDismissed(false)
   }, [activeYear])
+
+  const handleAuthSubmit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    const trimmed = apiKeyInput.trim()
+    if (!trimmed) return
+
+    setAuthError('')
+    const baseUrl = serverSyncUrl.trim() || DEFAULT_SYNC_URL
+    const verifyEndpoint = `${baseUrl.replace(/\/$/, '')}/verify-key`
+
+    try {
+      const res = await fetch(verifyEndpoint, { headers: { 'X-API-Key': trimmed } })
+      if (res.ok) {
+        localStorage.setItem(STORAGE_API_KEY, trimmed)
+        setAuthState('authenticated')
+        if (!hasAutoSyncedRef.current) {
+          hasAutoSyncedRef.current = true
+          void syncWithServerRange()
+        }
+      } else if (res.status === 429) {
+        const data = (await res.json()) as { blockedUntil?: number }
+        setAuthBlockedUntil(data.blockedUntil ?? null)
+        setAuthState('blocked')
+      } else {
+        const data = (await res.json()) as { remainingAttempts?: number }
+        const remaining = data.remainingAttempts ?? 0
+        setAuthError(`APIキーが正しくありません（残り${remaining}回）`)
+      }
+    } catch {
+      setAuthError('サーバーに接続できません')
+    }
+  }
+
+  if (authState === 'checking') {
+    return (
+      <div className="auth-screen">
+        <div className="auth-card auth-loading">
+          <p>読み込み中...</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (authState === 'blocked') {
+    const blockedDate = authBlockedUntil ? new Date(authBlockedUntil).toLocaleString('ja-JP') : ''
+    return (
+      <div className="auth-screen">
+        <div className="auth-card auth-blocked">
+          <h2>アクセスがブロックされています</h2>
+          <p>認証の試行回数を超えました。</p>
+          {blockedDate ? <p>解除予定: {blockedDate}</p> : null}
+        </div>
+      </div>
+    )
+  }
+
+  if (authState === 'need_key') {
+    return (
+      <div className="auth-screen">
+        <div className="auth-card">
+          <h2>認証が必要です</h2>
+          <p>APIキーを入力してください。</p>
+          {authError ? <p className="auth-error">{authError}</p> : null}
+          <form onSubmit={handleAuthSubmit} style={{ display: 'grid', gap: '0.6rem' }}>
+            <input
+              className="auth-input"
+              type="password"
+              value={apiKeyInput}
+              onChange={(e) => setApiKeyInput(e.target.value)}
+              placeholder="APIキー"
+              autoFocus
+            />
+            <button className="auth-submit" type="submit">
+              認証
+            </button>
+          </form>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <main className="app-shell">
