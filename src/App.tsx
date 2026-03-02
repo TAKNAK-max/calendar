@@ -68,6 +68,14 @@ type ModalDragState = {
   height: number
 }
 
+type SwipeState = {
+  pointerId: number
+  startX: number
+  startY: number
+  isSwiping: boolean
+  pointerType: string
+}
+
 type TokenCache = {
   clientId: string
   accessToken: string
@@ -138,6 +146,12 @@ const DEFAULT_COLORS: ColorSettings = {
 
 const today = new Date()
 const initialMonth = new Date(today.getFullYear(), today.getMonth(), 1)
+
+function isLocalModeQuery(): boolean {
+  if (typeof window === 'undefined') return false
+  const params = new URLSearchParams(window.location.search)
+  return params.get('mode') === 'local'
+}
 
 function toISODate(date: Date): string {
   const tz = date.getTimezoneOffset() * 60000
@@ -413,6 +427,7 @@ function modalIconByKind(kind: ConfirmModalKind): string {
 }
 
 export default function App() {
+  const isLocalMode = useMemo(() => isLocalModeQuery(), [])
   const [authState, setAuthState] = useState<AuthState>('checking')
   const [apiKeyInput, setApiKeyInput] = useState('')
   const [authError, setAuthError] = useState('')
@@ -437,6 +452,11 @@ export default function App() {
   const [modalPosition, setModalPosition] = useState<ModalPosition | null>(null)
   const tokenCacheRef = useRef<TokenCache | null>(null)
   const hasAutoSyncedRef = useRef(false)
+  const [slideDirection, setSlideDirection] = useState<-1 | 1 | 0>(0)
+  const [slidePhase, setSlidePhase] = useState<'idle' | 'prep' | 'run'>('idle')
+  const [slideTargetMonth, setSlideTargetMonth] = useState<Date | null>(null)
+  const swipeRef = useRef<SwipeState | null>(null)
+  const suppressClickRef = useRef(false)
   const [dayEditor, setDayEditor] = useState<DayEditor>({
     isOpen: false,
     date: toISODate(today),
@@ -444,8 +464,6 @@ export default function App() {
   })
   const dayMenuRef = useRef<HTMLDivElement | null>(null)
   const modalDragRef = useRef<ModalDragState | null>(null)
-
-  const cells = useMemo(() => buildMonthGrid(activeMonth), [activeMonth])
 
   const entriesByDate = useMemo(() => {
     return entries.reduce<Record<string, CalendarEntry[]>>((acc, entry) => {
@@ -519,6 +537,7 @@ export default function App() {
   }
 
   const syncSingleDayWithServer = async (date: string) => {
+    if (isLocalMode) return
     const baseUrl = serverSyncUrl.trim()
     if (!baseUrl || isServerSyncing || isServerClearing) return
 
@@ -544,7 +563,12 @@ export default function App() {
   }
 
   const jumpMonth = (diff: number) => {
-    setActiveMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() + diff, 1))
+    if (slidePhase !== 'idle') return
+    const direction: -1 | 1 = diff > 0 ? 1 : -1
+    const target = new Date(activeMonth.getFullYear(), activeMonth.getMonth() + direction, 1)
+    setSlideDirection(direction)
+    setSlideTargetMonth(target)
+    setSlidePhase('prep')
   }
 
   const openDayEditor = (date: string) => {
@@ -612,6 +636,84 @@ export default function App() {
     event.preventDefault()
   }
 
+  const onCalendarPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (slidePhase !== 'idle') return
+    const target = event.target as HTMLElement
+    if (target.closest('input,textarea,select,label,a')) return
+    swipeRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      isSwiping: false,
+      pointerType: event.pointerType,
+    }
+    console.log('[swipe] down', {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      target: target.tagName,
+    })
+    if (event.pointerType !== 'mouse') {
+      event.currentTarget.setPointerCapture(event.pointerId)
+    }
+  }
+
+  const onCalendarPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const swipe = swipeRef.current
+    if (!swipe || swipe.pointerId !== event.pointerId) return
+    const deltaX = event.clientX - swipe.startX
+    const deltaY = event.clientY - swipe.startY
+    if (swipe.isSwiping) {
+      console.log('[swipe] move', { deltaX, deltaY, swiping: true })
+      event.preventDefault()
+      return
+    }
+    const startThreshold = swipe.pointerType === 'mouse' ? 22 : 12
+    if (Math.abs(deltaX) > startThreshold && Math.abs(deltaX) > Math.abs(deltaY) * 1.15) {
+      swipe.isSwiping = true
+      console.log('[swipe] start', { deltaX, deltaY })
+      event.preventDefault()
+    } else {
+      console.log('[swipe] move', { deltaX, deltaY, swiping: false })
+    }
+  }
+
+  const onCalendarPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const swipe = swipeRef.current
+    if (!swipe || swipe.pointerId !== event.pointerId) return
+    const deltaX = event.clientX - swipe.startX
+    const deltaY = event.clientY - swipe.startY
+    const threshold = swipe.pointerType === 'mouse' ? 55 : 35
+    const passes = Math.abs(deltaX) >= threshold && Math.abs(deltaX) > Math.abs(deltaY) * 1.2
+    console.log('[swipe] up', { deltaX, deltaY, threshold, passes })
+    if (passes) {
+      if (deltaX < 0) {
+        console.log('[swipe] trigger next')
+        jumpMonth(1)
+      } else {
+        console.log('[swipe] trigger prev')
+        jumpMonth(-1)
+      }
+      suppressClickRef.current = true
+      window.setTimeout(() => {
+        suppressClickRef.current = false
+      }, 0)
+    } else if (swipe.isSwiping) {
+      suppressClickRef.current = true
+      window.setTimeout(() => {
+        suppressClickRef.current = false
+      }, 0)
+    }
+    swipeRef.current = null
+  }
+
+  const onCalendarPointerCancel = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const swipe = swipeRef.current
+    if (!swipe || swipe.pointerId !== event.pointerId) return
+    console.log('[swipe] cancel')
+    swipeRef.current = null
+  }
+
   useEffect(() => {
     const onPointerMove = (event: PointerEvent) => {
       const dragging = modalDragRef.current
@@ -655,6 +757,14 @@ export default function App() {
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
   }, [])
+
+  useEffect(() => {
+    if (slidePhase !== 'prep') return
+    const frame = window.requestAnimationFrame(() => {
+      setSlidePhase('run')
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [slidePhase])
 
   const moveDayEditor = (diffDays: number) => {
     void syncSingleDayWithServer(dayEditor.date)
@@ -960,6 +1070,10 @@ export default function App() {
   }
 
   const syncWithServerRange = async () => {
+    if (isLocalMode) {
+      setServerSyncMessage('ローカルモードのためサーバー同期は無効です')
+      return
+    }
     const baseUrl = serverSyncUrl.trim()
     if (!baseUrl) {
       setServerSyncMessage('同期サーバーURLを入力してください')
@@ -1002,6 +1116,10 @@ export default function App() {
   }
 
   const executeClearServerEntries = async () => {
+    if (isLocalMode) {
+      setServerSyncMessage('ローカルモードのためサーバー同期は無効です')
+      return
+    }
     const baseUrl = serverSyncUrl.trim()
     if (!baseUrl) {
       setServerSyncMessage('同期サーバーURLを入力してください')
@@ -1046,6 +1164,10 @@ export default function App() {
   }
 
   useEffect(() => {
+    if (isLocalMode) {
+      setAuthState('authenticated')
+      return
+    }
     const storedKey = localStorage.getItem(STORAGE_API_KEY) ?? ''
     if (!storedKey) {
       setAuthState('need_key')
@@ -1079,12 +1201,75 @@ export default function App() {
           void syncWithServerRange()
         }
       })
-  }, [])
+  }, [isLocalMode])
 
   const todayLabel = toISODate(today)
   const activeYear = activeMonth.getFullYear()
-  const needsYearSync = !syncedYears.includes(activeYear)
+  const needsYearSync = !isLocalMode && !syncedYears.includes(activeYear)
   const editorDayEntries = entriesByDate[dayEditor.date] ?? []
+  const isSliding = slidePhase !== 'idle' && slideTargetMonth !== null
+  const slideBaseMonth = slideTargetMonth ?? activeMonth
+  const slideMonths =
+    slideDirection === -1
+      ? [slideBaseMonth, activeMonth]
+      : [activeMonth, slideBaseMonth]
+  const sliderTransform =
+    slidePhase === 'run'
+      ? slideDirection === -1
+        ? 'translateX(0%)'
+        : 'translateX(-50%)'
+      : slideDirection === -1
+        ? 'translateX(-50%)'
+        : 'translateX(0%)'
+  const sliderTransition = slidePhase === 'run' ? 'transform 320ms ease' : 'none'
+  const renderMonthGrid = (month: Date, keyPrefix: string) => (
+    <div className="calendar-grid">
+      {buildMonthGrid(month).map((date) => {
+        const iso = toISODate(date)
+        const isCurrentMonth = date.getMonth() === month.getMonth()
+        const isEditing = dayEditor.isOpen && iso === dayEditor.date
+        const dayEntries = entriesByDate[iso] ?? []
+
+        return (
+          <button
+            key={`${keyPrefix}-${iso}`}
+            className={`day-cell ${isCurrentMonth ? '' : 'is-outside'} ${iso === todayLabel ? 'is-today' : ''} ${isEditing ? 'is-editing' : ''}`}
+            onClick={() => openDayEditor(iso)}
+          >
+            <span className="day-number">{date.getDate()}</span>
+            <div className="day-lines">
+              {dayEntries.slice(0, 3).map((entry) => (
+                <span
+                  key={entry.id}
+                  className={`line-tag ${entry.person} ${entry.category === 'free' ? 'is-free' : 'is-quick'}`}
+                  style={
+                    isQuickEntry(entry)
+                      ? {
+                          color: entry.color ?? colorSettings[actionKey(entry.person, entry.text)],
+                          borderColor: entry.color ?? colorSettings[actionKey(entry.person, entry.text)],
+                          backgroundColor: hexToRgba(
+                            entry.color ?? colorSettings[actionKey(entry.person, entry.text)],
+                            0.18,
+                          ),
+                        }
+                      : entry.color
+                        ? {
+                            color: entry.color,
+                            borderColor: entry.color,
+                            backgroundColor: hexToRgba(entry.color, 0.18),
+                          }
+                        : undefined
+                  }
+                >
+                  {entry.text}
+                </span>
+              ))}
+            </div>
+          </button>
+        )
+      })}
+    </div>
+  )
   const dayMenuStyle = modalPosition
     ? {
         position: 'fixed' as const,
@@ -1102,6 +1287,10 @@ export default function App() {
 
   const handleAuthSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
+    if (isLocalMode) {
+      setAuthState('authenticated')
+      return
+    }
     const trimmed = apiKeyInput.trim()
     if (!trimmed) return
 
@@ -1185,11 +1374,21 @@ export default function App() {
       <header className="app-header">
         <div className="header-main-row">
           <div className="month-nav">
-            <button className="nav-button" onClick={() => jumpMonth(-1)} aria-label="前の月">
+            <button
+              className="nav-button"
+              onClick={() => jumpMonth(-1)}
+              aria-label="前の月"
+              disabled={slidePhase !== 'idle'}
+            >
               前の月
             </button>
             <p>{formatMonth(activeMonth)}</p>
-            <button className="nav-button" onClick={() => jumpMonth(1)} aria-label="次の月">
+            <button
+              className="nav-button"
+              onClick={() => jumpMonth(1)}
+              aria-label="次の月"
+              disabled={slidePhase !== 'idle'}
+            >
               次の月
             </button>
           </div>
@@ -1317,51 +1516,40 @@ export default function App() {
           ))}
         </div>
 
-        <div className="calendar-grid">
-          {cells.map((date) => {
-            const iso = toISODate(date)
-            const isCurrentMonth = date.getMonth() === activeMonth.getMonth()
-            const isEditing = dayEditor.isOpen && iso === dayEditor.date
-            const dayEntries = entriesByDate[iso] ?? []
-
-            return (
-              <button
-                key={iso}
-                className={`day-cell ${isCurrentMonth ? '' : 'is-outside'} ${iso === todayLabel ? 'is-today' : ''} ${isEditing ? 'is-editing' : ''}`}
-                onClick={() => openDayEditor(iso)}
-              >
-                <span className="day-number">{date.getDate()}</span>
-                <div className="day-lines">
-                  {dayEntries.slice(0, 3).map((entry) => (
-                    <span
-                      key={entry.id}
-                      className={`line-tag ${entry.person} ${entry.category === 'free' ? 'is-free' : 'is-quick'}`}
-                      style={
-                        isQuickEntry(entry)
-                          ? {
-                              color: entry.color ?? colorSettings[actionKey(entry.person, entry.text)],
-                              borderColor: entry.color ?? colorSettings[actionKey(entry.person, entry.text)],
-                              backgroundColor: hexToRgba(
-                                entry.color ?? colorSettings[actionKey(entry.person, entry.text)],
-                                0.18,
-                              ),
-                            }
-                          : entry.color
-                            ? {
-                                color: entry.color,
-                                borderColor: entry.color,
-                                backgroundColor: hexToRgba(entry.color, 0.18),
-                              }
-                            : undefined
-                      }
-                    >
-                      {entry.text}
-                    </span>
-                  ))}
+        <div
+          className="calendar-viewport"
+          onPointerDown={onCalendarPointerDown}
+          onPointerMove={onCalendarPointerMove}
+          onPointerUp={onCalendarPointerUp}
+          onPointerCancel={onCalendarPointerCancel}
+          onClickCapture={(event) => {
+            if (!suppressClickRef.current) return
+            event.preventDefault()
+            event.stopPropagation()
+            suppressClickRef.current = false
+          }}
+        >
+          {isSliding ? (
+            <div
+              className="month-slider"
+              style={{ transform: sliderTransform, transition: sliderTransition }}
+              onTransitionEnd={(event) => {
+                if (event.propertyName !== 'transform' || slidePhase !== 'run' || !slideTargetMonth) return
+                setActiveMonth(slideTargetMonth)
+                setSlidePhase('idle')
+                setSlideDirection(0)
+                setSlideTargetMonth(null)
+              }}
+            >
+              {slideMonths.map((month, idx) => (
+                <div className="month-panel" key={`${month.getFullYear()}-${month.getMonth()}-${idx}`}>
+                  {renderMonthGrid(month, `slide-${idx}`)}
                 </div>
-              </button>
-            )
-          })}
+              ))}
+            </div>
+          ) : (
+            renderMonthGrid(activeMonth, 'base')
+          )}
         </div>
       </section>
 

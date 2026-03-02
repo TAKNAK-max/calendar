@@ -38,6 +38,12 @@
 
 `calendar-sync-server/` を同居させると、Google 連携なしで HTTP 同期できます。
 
+## デバッグモード（ローカル）
+
+クエリに `mode=local` を付けると、サーバー認証・同期の通信を行わずにカレンダー画面へ直接遷移します。
+
+例: `http://localhost:5173/?mode=local`
+
 ### Calendar 側の動き
 
 1. メニューの `同期サーバーURL`（初期値: `/calendar-api`）を設定する。

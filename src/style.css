@@ -24,7 +24,7 @@ html,
 body,
 #app {
   margin: 0;
-  min-height: 100%;
+  height: 100dvh;
 }
 
 body {
@@ -41,12 +41,20 @@ input {
   font: inherit;
 }
 
+input,
+textarea,
+select {
+  user-select: text;
+}
+
 .app-shell {
+  height: 100dvh;
   min-height: 100dvh;
   padding: max(0.6rem, env(safe-area-inset-top)) 0.6rem max(0.6rem, env(safe-area-inset-bottom));
   display: grid;
   grid-template-rows: auto 1fr;
   gap: 0.6rem;
+  user-select: none;
 }
 
 .app-header {
@@ -316,6 +324,7 @@ input {
 
 .calendar-area {
   min-height: 0;
+  height: 100%;
   overflow: hidden;
   background: color-mix(in oklab, var(--surface), #f8fbff 18%);
   border: 1px solid var(--line);
@@ -324,6 +333,25 @@ input {
   display: grid;
   grid-template-rows: auto 1fr;
   gap: 0.45rem;
+}
+
+.calendar-viewport {
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  touch-action: pan-y;
+}
+
+.month-slider {
+  display: flex;
+  width: 200%;
+  height: 100%;
+}
+
+.month-panel {
+  flex: 0 0 50%;
+  width: 50%;
+  min-height: 0;
 }
 
 .week-header {
@@ -345,6 +373,7 @@ input {
 
 .calendar-grid {
   min-height: 0;
+  height: 100%;
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
   grid-template-rows: repeat(6, minmax(0, 1fr));
