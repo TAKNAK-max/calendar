@@ -11,10 +11,12 @@
     - `endYear`: number
     - `entries`: `CalendarEntry[]`
     - `removedIds`: string[]
+    - `colorSettings?`: `Record<string, string>`
   - response:
     - `years`: number[]
     - `entries`: `CalendarEntry[]`
     - `removedIds`: string[]
+    - `colorSettings`: `Record<string, string>`
 - `POST /clear-all`
   - response:
     - `deletedFiles`: number

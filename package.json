@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
     "build": "tsc && vite build",
-    "release": "tsc && vite build --outDir calendar",
+    "release": "tsc && vite build --outDir calendar && mkdir -p /home/takashi/server/www && rm -rf /home/takashi/server/www/calendar && cp -r calendar /home/takashi/server/www/calendar",
     "preview": "vite preview"
   },
   "devDependencies": {

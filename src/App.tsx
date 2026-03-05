@@ -9,6 +9,8 @@ type CalendarEntry = {
   person: Person
   category: 'quick' | 'free'
   color?: string
+  time?: string
+  notifyEnabled?: boolean
   googleEventId?: string
 }
 
@@ -22,12 +24,14 @@ type ServerSyncPayload = {
   endYear: number
   entries: CalendarEntry[]
   removedIds: string[]
+  colorSettings?: ColorSettings
 }
 
 type ServerSyncResponse = {
   years: number[]
   entries: CalendarEntry[]
   removedIds: string[]
+  colorSettings?: ColorSettings
 }
 
 type ServerClearResponse = {
@@ -52,7 +56,12 @@ type ColorSettings = Record<string, string>
 type DayEditor = {
   isOpen: boolean
   date: string
-  inputs: { rowId: string; value: string; color: string; entryId?: string }[]
+  inputs: { rowId: string; value: string; color: string; time: string; notifyEnabled: boolean; entryId?: string }[]
+}
+
+type TimePickerState = {
+  rowId: string
+  value: string
 }
 
 type ModalPosition = {
@@ -137,6 +146,7 @@ const APP_SOURCE = 'futari-calendar-web'
 const DEFAULT_GOOGLE_CLIENT_ID = '719425138729-jo1krmiqsvlopbhc3ibome39degm61d9.apps.googleusercontent.com'
 const DEFAULT_SYNC_URL = '/calendar-api'
 const DEFAULT_FREE_TEXT_COLOR = '#7a869a'
+const APP_VERSION = '0.0.1'
 const DEFAULT_COLORS: ColorSettings = {
   'tarchin:休': '#f39a7a',
   'yacchin:早': '#78aad8',
@@ -185,6 +195,11 @@ function loadEntries(): CalendarEntry[] {
       .map((item) => ({
         ...item,
         text: item.category === 'quick' ? LEGACY_QUICK_TEXT_MAP[item.text] ?? item.text : item.text,
+        time:
+          typeof item.time === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(item.time)
+            ? item.time
+            : undefined,
+        notifyEnabled: item.notifyEnabled === true,
       }))
   } catch {
     return []
@@ -242,19 +257,25 @@ function loadColorSettings(): ColorSettings {
   if (!raw) return { ...DEFAULT_COLORS }
   try {
     const parsed = JSON.parse(raw) as ColorSettings
-    const normalized: ColorSettings = { ...DEFAULT_COLORS }
-    for (const [key, value] of Object.entries(parsed)) {
-      const [person, action] = key.split(':')
-      if ((person === 'tarchin' || person === 'yacchin') && action) {
-        normalized[actionKey(person, LEGACY_QUICK_TEXT_MAP[action] ?? action)] = value
-      } else {
-        normalized[key] = value
-      }
-    }
-    return normalized
+    return normalizeColorSettings(parsed)
   } catch {
     return { ...DEFAULT_COLORS }
   }
+}
+
+function normalizeColorSettings(raw: Record<string, unknown> | null | undefined): ColorSettings {
+  const normalized: ColorSettings = { ...DEFAULT_COLORS }
+  if (!raw) return normalized
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value !== 'string') continue
+    const [person, action] = key.split(':')
+    if ((person === 'tarchin' || person === 'yacchin') && action) {
+      normalized[actionKey(person, LEGACY_QUICK_TEXT_MAP[action] ?? action)] = value
+    } else {
+      normalized[key] = value
+    }
+  }
+  return normalized
 }
 
 function hexToRgba(hex: string, alpha: number): string {
@@ -445,6 +466,7 @@ export default function App() {
   const [serverSyncMessage, setServerSyncMessage] = useState('')
   const [isServerSyncing, setIsServerSyncing] = useState(false)
   const [isServerClearing, setIsServerClearing] = useState(false)
+  const [isApplyingQuickAction, setIsApplyingQuickAction] = useState(false)
   const [syncedYears, setSyncedYears] = useState<number[]>([])
   const [confirmModal, setConfirmModal] = useState<ConfirmModalState | null>(null)
   const [, setRemovedEntryIds] = useState<string[]>(() => loadRemovedIds())
@@ -460,8 +482,9 @@ export default function App() {
   const [dayEditor, setDayEditor] = useState<DayEditor>({
     isOpen: false,
     date: toISODate(today),
-    inputs: [{ rowId: createId(), value: '', color: DEFAULT_FREE_TEXT_COLOR }],
+    inputs: [{ rowId: createId(), value: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyEnabled: false }],
   })
+  const [timePicker, setTimePicker] = useState<TimePickerState | null>(null)
   const dayMenuRef = useRef<HTMLDivElement | null>(null)
   const modalDragRef = useRef<ModalDragState | null>(null)
 
@@ -500,6 +523,13 @@ export default function App() {
     })
   }
 
+  const applySyncedColorSettings = (next: ColorSettings | undefined) => {
+    if (!next) return
+    const normalized = normalizeColorSettings(next)
+    setColorSettings(normalized)
+    localStorage.setItem(STORAGE_COLORS, JSON.stringify(normalized))
+  }
+
   const updateGoogleSettings = (nextSettings: GoogleSettings) => {
     if (nextSettings.clientId.trim() !== googleSettings.clientId.trim()) {
       tokenCacheRef.current = null
@@ -521,6 +551,7 @@ export default function App() {
       endYear,
       entries: targetEntries,
       removedIds: removedIdsSnapshot,
+      colorSettings,
     }
 
     const endpoint = `${baseUrl.replace(/\/$/, '')}/sync-range`
@@ -549,11 +580,56 @@ export default function App() {
       const dayEntries = snapshot.filter((entry) => entry.date === date)
       const data = await postServerSync(year, year, dayEntries)
       clearRemovedEntries(data.removedIds ?? [])
+      applySyncedColorSettings(data.colorSettings)
       setSyncedYears((prev) => Array.from(new Set([...prev, year])).sort((a, b) => a - b))
     } catch (error) {
       const message = error instanceof Error ? error.message : '日次同期に失敗しました'
       setServerSyncMessage(`エラー: ${message}`)
     }
+  }
+
+  const syncYearBeforeQuickAction = async (date: string): Promise<CalendarEntry[]> => {
+    const snapshot = loadEntries()
+    if (isLocalMode) return snapshot
+
+    const baseUrl = serverSyncUrl.trim()
+    if (!baseUrl) {
+      throw new Error('同期サーバーURLが未設定のため、登録前同期を実行できません')
+    }
+    if (isServerSyncing || isServerClearing) {
+      throw new Error('サーバー同期中のため、完了後に再試行してください')
+    }
+
+    const year = new Date(`${date}T00:00:00`).getFullYear()
+    if (Number.isNaN(year)) {
+      throw new Error('日付が不正です')
+    }
+
+    const endpoint = `${baseUrl.replace(/\/$/, '')}/sync-range`
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': localStorage.getItem(STORAGE_API_KEY) ?? '' },
+      body: JSON.stringify({
+        startYear: year,
+        endYear: year,
+        entries: [],
+        removedIds: [],
+      } satisfies ServerSyncPayload),
+    })
+    if (!response.ok) {
+      const text = await response.text()
+      throw new Error(`HTTP ${response.status}: ${text}`)
+    }
+    const data = (await response.json()) as ServerSyncResponse
+    const merged = [
+      ...snapshot.filter((entry) => new Date(`${entry.date}T00:00:00`).getFullYear() !== year),
+      ...data.entries,
+    ]
+
+    saveEntries(merged)
+    applySyncedColorSettings(data.colorSettings)
+    setSyncedYears((prev) => Array.from(new Set([...prev, year])).sort((a, b) => a - b))
+    return merged
   }
 
   const changePerson = (person: Person) => {
@@ -582,6 +658,8 @@ export default function App() {
         rowId: createId(),
         value: entry.text,
         color: entry.color ?? DEFAULT_FREE_TEXT_COLOR,
+        time: entry.time ?? '',
+        notifyEnabled: entry.notifyEnabled === true,
         entryId: entry.id,
       }))
 
@@ -591,7 +669,7 @@ export default function App() {
       inputs:
         existingRows.length > 0
           ? existingRows
-          : [{ rowId: createId(), value: '', color: DEFAULT_FREE_TEXT_COLOR }],
+          : [{ rowId: createId(), value: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyEnabled: false }],
     })
   }
 
@@ -599,6 +677,7 @@ export default function App() {
     const targetDate = dayEditor.date
     modalDragRef.current = null
     setModalPosition(null)
+    setTimePicker(null)
     setDayEditor((prev) => ({ ...prev, isOpen: false }))
     if (syncCurrentDay) {
       void syncSingleDayWithServer(targetDate)
@@ -772,35 +851,39 @@ export default function App() {
     openDayEditor(next)
   }
 
-  const applyQuickAction = (text: string) => {
-    setEntries((prev) => {
-      const exists = prev.some(
-        (entry) => entry.date === dayEditor.date && entry.person === selectedPerson && entry.text === text,
+  const applyQuickAction = async (text: string) => {
+    if (isApplyingQuickAction) return
+    setIsApplyingQuickAction(true)
+
+    const targetDate = dayEditor.date
+    const targetPerson = selectedPerson
+
+    try {
+      const baseEntries = await syncYearBeforeQuickAction(targetDate)
+      const exists = baseEntries.some(
+        (entry) => entry.date === targetDate && entry.person === targetPerson && entry.text === text,
       )
 
       let nextEntries: CalendarEntry[]
       let removedIds: string[] = []
 
-      if (selectedPerson === 'tarchin' && text === TARCHIN_VACATION) {
+      if (targetPerson === 'tarchin' && text === TARCHIN_VACATION) {
         if (exists) {
-          removedIds = prev
-            .filter(
-              (entry) =>
-                entry.date === dayEditor.date && entry.person === 'tarchin' && entry.text === TARCHIN_VACATION,
-            )
+          removedIds = baseEntries
+            .filter((entry) => entry.date === targetDate && entry.person === 'tarchin' && entry.text === TARCHIN_VACATION)
             .map((entry) => entry.id)
-          nextEntries = prev.filter(
-            (entry) => !(entry.date === dayEditor.date && entry.person === 'tarchin' && entry.text === TARCHIN_VACATION),
+          nextEntries = baseEntries.filter(
+            (entry) => !(entry.date === targetDate && entry.person === 'tarchin' && entry.text === TARCHIN_VACATION),
           )
         } else {
-          const withoutVacation = prev.filter(
-            (entry) => !(entry.date === dayEditor.date && entry.person === 'tarchin' && entry.text === TARCHIN_VACATION),
+          const withoutVacation = baseEntries.filter(
+            (entry) => !(entry.date === targetDate && entry.person === 'tarchin' && entry.text === TARCHIN_VACATION),
           )
           nextEntries = [
             ...withoutVacation,
             {
               id: createId(),
-              date: dayEditor.date,
+              date: targetDate,
               text: TARCHIN_VACATION,
               person: 'tarchin',
               category: 'quick',
@@ -809,35 +892,29 @@ export default function App() {
           ]
         }
       } else {
-        if (selectedPerson === 'yacchin') {
+        if (targetPerson === 'yacchin') {
           const yacchinActions = new Set(QUICK_ACTIONS.yacchin)
           if (exists) {
-            removedIds = prev
-              .filter((entry) => entry.date === dayEditor.date && entry.person === 'yacchin' && entry.text === text)
+            removedIds = baseEntries
+              .filter((entry) => entry.date === targetDate && entry.person === 'yacchin' && entry.text === text)
               .map((entry) => entry.id)
-            nextEntries = prev.filter(
-              (entry) => !(entry.date === dayEditor.date && entry.person === 'yacchin' && entry.text === text),
+            nextEntries = baseEntries.filter(
+              (entry) => !(entry.date === targetDate && entry.person === 'yacchin' && entry.text === text),
             )
           } else {
-            removedIds = prev
+            removedIds = baseEntries
               .filter(
-                (entry) =>
-                  entry.date === dayEditor.date && entry.person === 'yacchin' && yacchinActions.has(entry.text),
+                (entry) => entry.date === targetDate && entry.person === 'yacchin' && yacchinActions.has(entry.text),
               )
               .map((entry) => entry.id)
-            const withoutOtherShift = prev.filter(
-              (entry) =>
-                !(
-                  entry.date === dayEditor.date &&
-                  entry.person === 'yacchin' &&
-                  yacchinActions.has(entry.text)
-                ),
+            const withoutOtherShift = baseEntries.filter(
+              (entry) => !(entry.date === targetDate && entry.person === 'yacchin' && yacchinActions.has(entry.text)),
             )
             nextEntries = [
               ...withoutOtherShift,
               {
                 id: createId(),
-                date: dayEditor.date,
+                date: targetDate,
                 text,
                 person: 'yacchin',
                 category: 'quick',
@@ -846,37 +923,45 @@ export default function App() {
             ]
           }
         } else if (exists) {
-          removedIds = prev
-            .filter((entry) => entry.date === dayEditor.date && entry.person === selectedPerson && entry.text === text)
+          removedIds = baseEntries
+            .filter((entry) => entry.date === targetDate && entry.person === targetPerson && entry.text === text)
             .map((entry) => entry.id)
-          nextEntries = prev.filter(
-            (entry) => !(entry.date === dayEditor.date && entry.person === selectedPerson && entry.text === text),
+          nextEntries = baseEntries.filter(
+            (entry) => !(entry.date === targetDate && entry.person === targetPerson && entry.text === text),
           )
         } else {
           nextEntries = [
-            ...prev,
+            ...baseEntries,
             {
               id: createId(),
-              date: dayEditor.date,
+              date: targetDate,
               text,
-              person: selectedPerson,
+              person: targetPerson,
               category: 'quick',
-              color: colorSettings[actionKey(selectedPerson, text)],
+              color: colorSettings[actionKey(targetPerson, text)],
             },
           ]
         }
       }
 
       markEntriesRemoved(removedIds)
-      localStorage.setItem(STORAGE_ENTRIES, JSON.stringify(nextEntries))
-      return nextEntries
-    })
+      saveEntries(nextEntries)
+      void syncSingleDayWithServer(targetDate)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '登録前同期に失敗しました'
+      setServerSyncMessage(`エラー: ${message}`)
+    } finally {
+      setIsApplyingQuickAction(false)
+    }
   }
 
   const addInputBox = () => {
     setDayEditor((prev) => ({
       ...prev,
-      inputs: [...prev.inputs, { rowId: createId(), value: '', color: DEFAULT_FREE_TEXT_COLOR }],
+      inputs: [
+        ...prev.inputs,
+        { rowId: createId(), value: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyEnabled: false },
+      ],
     }))
   }
 
@@ -911,6 +996,57 @@ export default function App() {
     saveEntries(entries.map((entry) => (entry.id === targetRow.entryId ? { ...entry, color } : entry)))
   }
 
+  const updateInputTime = (rowId: string, time: string) => {
+    setDayEditor((prev) => ({
+      ...prev,
+      inputs: prev.inputs.map((item) => (item.rowId === rowId ? { ...item, time } : item)),
+    }))
+
+    const targetRow = dayEditor.inputs.find((row) => row.rowId === rowId)
+    if (!targetRow?.entryId) return
+    saveEntries(entries.map((entry) => (entry.id === targetRow.entryId ? { ...entry, time: time || undefined } : entry)))
+  }
+
+  const openTimePicker = (rowId: string, value: string) => {
+    setTimePicker({ rowId, value })
+  }
+
+  const closeTimePicker = () => {
+    setTimePicker(null)
+  }
+
+  const confirmTimePicker = () => {
+    if (!timePicker) return
+    updateInputTime(timePicker.rowId, timePicker.value)
+    setTimePicker(null)
+  }
+
+  const resetTimePicker = () => {
+    if (!timePicker) return
+    updateInputTime(timePicker.rowId, '')
+    setTimePicker(null)
+  }
+
+  const toggleInputNotify = (rowId: string) => {
+    let nextNotify = false
+    setDayEditor((prev) => ({
+      ...prev,
+      inputs: prev.inputs.map((item) => {
+        if (item.rowId !== rowId) return item
+        nextNotify = !item.notifyEnabled
+        return { ...item, notifyEnabled: nextNotify }
+      }),
+    }))
+
+    const targetRow = dayEditor.inputs.find((row) => row.rowId === rowId)
+    if (!targetRow?.entryId) return
+    saveEntries(
+      entries.map((entry) =>
+        entry.id === targetRow.entryId ? { ...entry, notifyEnabled: !targetRow.notifyEnabled } : entry,
+      ),
+    )
+  }
+
   const submitInputRow = (rowId: string) => {
     const targetRow = dayEditor.inputs.find((row) => row.rowId === rowId)
     if (!targetRow || targetRow.entryId) return
@@ -925,6 +1061,8 @@ export default function App() {
       person: selectedPerson,
       category: 'free',
       color: targetRow.color,
+      time: targetRow.time || undefined,
+      notifyEnabled: targetRow.notifyEnabled,
     }
 
     saveEntries([...entries, newEntry])
@@ -945,7 +1083,9 @@ export default function App() {
     setDayEditor((prev) => ({
       ...prev,
       inputs: prev.inputs.map((row) =>
-        row.rowId === rowId ? { ...row, value: '', color: DEFAULT_FREE_TEXT_COLOR, entryId: undefined } : row,
+        row.rowId === rowId
+          ? { ...row, value: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyEnabled: false, entryId: undefined }
+          : row,
       ),
     }))
   }
@@ -1105,10 +1245,70 @@ export default function App() {
 
       saveEntries(merged)
       clearRemovedEntries(data.removedIds ?? [])
+      applySyncedColorSettings(data.colorSettings)
       setSyncedYears((prev) => Array.from(new Set([...prev, ...Array.from(years)])).sort((a, b) => a - b))
       setServerSyncMessage(`同期完了: ${startYear}年〜${endYear}年 (${data.entries.length}件)`)
     } catch (error) {
       const message = error instanceof Error ? error.message : '同期に失敗しました'
+      setServerSyncMessage(`エラー: ${message}`)
+    } finally {
+      setIsServerSyncing(false)
+    }
+  }
+
+  const syncWithServerRangeOnStartup = async () => {
+    if (isLocalMode) {
+      setServerSyncMessage('ローカルモードのためサーバー同期は無効です')
+      return
+    }
+    const baseUrl = serverSyncUrl.trim()
+    if (!baseUrl) {
+      setServerSyncMessage('同期サーバーURLを入力してください')
+      return
+    }
+
+    const centerYear = activeMonth.getFullYear()
+    const startYear = centerYear - 1
+    const endYear = centerYear + 1
+
+    setIsServerSyncing(true)
+    setServerSyncMessage(`起動時同期中: ${startYear}年〜${endYear}年`)
+
+    try {
+      const endpoint = `${baseUrl.replace(/\/$/, '')}/sync-range`
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-API-Key': localStorage.getItem(STORAGE_API_KEY) ?? '' },
+        body: JSON.stringify({
+          startYear,
+          endYear,
+          entries: [],
+          removedIds: [],
+        } satisfies ServerSyncPayload),
+      })
+      if (!response.ok) {
+        const text = await response.text()
+        throw new Error(`HTTP ${response.status}: ${text}`)
+      }
+
+      const data = (await response.json()) as ServerSyncResponse
+      const years = new Set(data.years ?? [])
+      const replaced = [
+        ...entries.filter((entry) => {
+          const year = new Date(`${entry.date}T00:00:00`).getFullYear()
+          return year < startYear || year > endYear
+        }),
+        ...data.entries,
+      ]
+
+      saveEntries(replaced)
+      applySyncedColorSettings(data.colorSettings)
+      setRemovedEntryIds([])
+      localStorage.setItem(STORAGE_REMOVED_IDS, JSON.stringify([]))
+      setSyncedYears((prev) => Array.from(new Set([...prev, ...Array.from(years)])).sort((a, b) => a - b))
+      setServerSyncMessage(`起動時同期完了: ${startYear}年〜${endYear}年 (${data.entries.length}件)`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '起動時同期に失敗しました'
       setServerSyncMessage(`エラー: ${message}`)
     } finally {
       setIsServerSyncing(false)
@@ -1182,7 +1382,7 @@ export default function App() {
           setAuthState('authenticated')
           if (!hasAutoSyncedRef.current) {
             hasAutoSyncedRef.current = true
-            void syncWithServerRange()
+            void syncWithServerRangeOnStartup()
           }
         } else if (res.status === 429) {
           return res.json().then((data: { blockedUntil?: number }) => {
@@ -1198,7 +1398,7 @@ export default function App() {
         setAuthState('authenticated')
         if (!hasAutoSyncedRef.current) {
           hasAutoSyncedRef.current = true
-          void syncWithServerRange()
+          void syncWithServerRangeOnStartup()
         }
       })
   }, [isLocalMode])
@@ -1305,7 +1505,7 @@ export default function App() {
         setAuthState('authenticated')
         if (!hasAutoSyncedRef.current) {
           hasAutoSyncedRef.current = true
-          void syncWithServerRange()
+          void syncWithServerRangeOnStartup()
         }
       } else if (res.status === 429) {
         const data = (await res.json()) as { blockedUntil?: number }
@@ -1459,6 +1659,7 @@ export default function App() {
 
             <details className="developer-panel">
               <summary>開発者用</summary>
+              <p className="sync-message">Version: {APP_VERSION}</p>
               <button className="sync-button" onClick={clearServerEntries} disabled={isServerClearing}>
                 {isServerClearing ? '削除中...' : 'サーバー予定を全削除'}
               </button>
@@ -1629,6 +1830,7 @@ export default function App() {
                   key={action}
                   className={`quick-button ${isQuickActionActive(action) ? 'is-active' : ''}`}
                   onClick={() => applyQuickAction(action)}
+                  disabled={isApplyingQuickAction}
                   style={{
                     color: colorSettings[actionKey(selectedPerson, action)],
                     borderColor: colorSettings[actionKey(selectedPerson, action)],
@@ -1656,6 +1858,16 @@ export default function App() {
                     readOnly={Boolean(row.entryId)}
                     onChange={(event) => updateInput(row.rowId, event.target.value)}
                   />
+                  <button type="button" className="row-time-input row-time-button" onClick={() => openTimePicker(row.rowId, row.time)}>
+                    {row.time || '--:--'}
+                  </button>
+                  <button
+                    className={`row-action-button row-notify-toggle ${row.notifyEnabled ? 'is-active' : ''}`}
+                    type="button"
+                    onClick={() => toggleInputNotify(row.rowId)}
+                  >
+                    通知{row.notifyEnabled ? 'ON' : 'OFF'}
+                  </button>
                   <input
                     type="color"
                     className="row-color-picker"
@@ -1682,6 +1894,71 @@ export default function App() {
                 </button>
               ) : null}
             </div>
+
+            {timePicker ? (
+              <div className="time-modal-backdrop" onClick={closeTimePicker}>
+                <div className="time-modal" onClick={(event) => event.stopPropagation()}>
+                  <div className="time-picker-row">
+                    <select
+                      className="time-select"
+                      value={timePicker.value ? timePicker.value.slice(0, 2) : ''}
+                      onChange={(event) => {
+                        const hour = event.target.value
+                        setTimePicker((prev) => {
+                          if (!prev) return prev
+                          const minute = prev.value ? prev.value.slice(3, 5) : '00'
+                          if (!hour) return { ...prev, value: '' }
+                          return { ...prev, value: `${hour}:${minute}` }
+                        })
+                      }}
+                      autoFocus
+                    >
+                      <option value="">--</option>
+                      {Array.from({ length: 24 }, (_, idx) => {
+                        const v = String(idx).padStart(2, '0')
+                        return (
+                          <option key={v} value={v}>
+                            {v}
+                          </option>
+                        )
+                      })}
+                    </select>
+                    <span className="time-colon">:</span>
+                    <select
+                      className="time-select"
+                      value={timePicker.value ? timePicker.value.slice(3, 5) : ''}
+                      onChange={(event) => {
+                        const minute = event.target.value
+                        setTimePicker((prev) => {
+                          if (!prev) return prev
+                          const hour = prev.value ? prev.value.slice(0, 2) : '00'
+                          if (!minute) return { ...prev, value: '' }
+                          return { ...prev, value: `${hour}:${minute}` }
+                        })
+                      }}
+                    >
+                      <option value="">--</option>
+                      {Array.from({ length: 60 }, (_, idx) => {
+                        const v = String(idx).padStart(2, '0')
+                        return (
+                          <option key={v} value={v}>
+                            {v}
+                          </option>
+                        )
+                      })}
+                    </select>
+                  </div>
+                  <div className="time-modal-actions">
+                    <button className="row-action-button" type="button" onClick={resetTimePicker}>
+                      リセット
+                    </button>
+                    <button className="sync-button" type="button" onClick={confirmTimePicker}>
+                      決定
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}

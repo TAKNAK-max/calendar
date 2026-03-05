@@ -32,12 +32,53 @@ function sanitizeEntry(entry) {
     person: entry.person,
     category: entry.category,
     color: typeof entry.color === 'string' ? entry.color : undefined,
+    time:
+      typeof entry.time === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(entry.time)
+        ? entry.time
+        : undefined,
+    notifyEnabled: entry.notifyEnabled === true,
     googleEventId: typeof entry.googleEventId === 'string' ? entry.googleEventId : undefined,
   }
 }
 
 function filePathForYear(year) {
   return path.join(dataDir, `${year}.json`)
+}
+
+function settingsFilePath() {
+  return path.join(dataDir, 'settings.json')
+}
+
+function sanitizeColorSettings(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const normalized = {}
+  for (const [key, color] of Object.entries(value)) {
+    if (typeof color !== 'string') continue
+    normalized[key] = color
+  }
+  return normalized
+}
+
+async function readSettings() {
+  const filePath = settingsFilePath()
+  try {
+    const raw = await fs.readFile(filePath, 'utf8')
+    const parsed = JSON.parse(raw)
+    return {
+      colorSettings: sanitizeColorSettings(parsed?.colorSettings) ?? {},
+    }
+  } catch (error) {
+    if (error && typeof error === 'object' && error.code === 'ENOENT') {
+      return { colorSettings: {} }
+    }
+    throw error
+  }
+}
+
+async function writeSettings(settings) {
+  await fs.mkdir(dataDir, { recursive: true })
+  const filePath = settingsFilePath()
+  await fs.writeFile(filePath, JSON.stringify(settings, null, 2), 'utf8')
 }
 
 async function readYear(year) {
@@ -69,7 +110,7 @@ app.get('/health', (_req, res) => {
 
 app.post('/sync-range', async (req, res) => {
   try {
-    const { startYear, endYear, entries, removedIds = [] } = req.body ?? {}
+    const { startYear, endYear, entries, removedIds = [], colorSettings } = req.body ?? {}
     if (!Number.isInteger(startYear) || !Number.isInteger(endYear) || startYear > endYear) {
       res.status(400).json({ error: 'startYear/endYear が不正です' })
       return
@@ -84,6 +125,10 @@ app.post('/sync-range', async (req, res) => {
     }
     if (!Array.isArray(removedIds)) {
       res.status(400).json({ error: 'removedIds は配列で指定してください' })
+      return
+    }
+    if (colorSettings !== undefined && sanitizeColorSettings(colorSettings) === null) {
+      res.status(400).json({ error: 'colorSettings はオブジェクトで指定してください' })
       return
     }
 
@@ -112,6 +157,13 @@ app.post('/sync-range', async (req, res) => {
       mergedById.set(item.id, item)
     }
 
+    const currentSettings = await readSettings()
+    const requestColorSettings = sanitizeColorSettings(colorSettings)
+    const mergedColorSettings = requestColorSettings ?? currentSettings.colorSettings
+    if (requestColorSettings) {
+      await writeSettings({ colorSettings: mergedColorSettings })
+    }
+
     const byYear = new Map(years.map((year) => [year, []]))
     for (const item of mergedById.values()) {
       const year = yearFromDate(item.date)
@@ -132,6 +184,7 @@ app.post('/sync-range', async (req, res) => {
       years,
       entries: mergedEntries,
       removedIds: validRemovedIds,
+      colorSettings: mergedColorSettings,
     })
   } catch (error) {
     console.error(error)
