@@ -146,7 +146,7 @@ const APP_SOURCE = 'futari-calendar-web'
 const DEFAULT_GOOGLE_CLIENT_ID = '719425138729-jo1krmiqsvlopbhc3ibome39degm61d9.apps.googleusercontent.com'
 const DEFAULT_SYNC_URL = '/calendar-api'
 const DEFAULT_FREE_TEXT_COLOR = '#7a869a'
-const APP_VERSION = '0.0.1'
+const APP_VERSION = '0.0.2'
 const DEFAULT_COLORS: ColorSettings = {
   'tarchin:休': '#f39a7a',
   'yacchin:早': '#78aad8',
@@ -1363,6 +1363,35 @@ export default function App() {
     })
   }
 
+  const forceReloadApp = async () => {
+    try {
+      // Service Worker のキャッシュをクリア
+      if ('caches' in window) {
+        const cacheNames = await caches.keys()
+        await Promise.all(cacheNames.map((name) => caches.delete(name)))
+      }
+
+      // localStorage から認証キーをバックアップ
+      const authKey = localStorage.getItem(STORAGE_API_KEY)
+
+      // localStorage全削除
+      localStorage.clear()
+
+      // 認証キーだけ復元
+      if (authKey) {
+        localStorage.setItem(STORAGE_API_KEY, authKey)
+      }
+
+      // 強制リロード
+      window.location.reload()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '強制リロード中にエラーが発生しました'
+      console.error('Force reload error:', message)
+      // エラーでもリロードを実行
+      window.location.reload()
+    }
+  }
+
   useEffect(() => {
     if (isLocalMode) {
       setAuthState('authenticated')
@@ -1599,7 +1628,9 @@ export default function App() {
         </div>
 
         {isMenuOpen ? (
-          <div className="menu-panel">
+          <>
+            <div className="menu-overlay" onClick={() => setIsMenuOpen(false)} />
+            <div className="menu-panel" onClick={(e) => e.stopPropagation()}>
             <div className="person-buttons">
               <button
                 className={`person-button ${selectedPerson === 'tarchin' ? 'is-active' : ''}`}
@@ -1660,6 +1691,9 @@ export default function App() {
             <details className="developer-panel">
               <summary>開発者用</summary>
               <p className="sync-message">Version: {APP_VERSION}</p>
+              <button className="sync-button" onClick={forceReloadApp}>
+                強制リロード
+              </button>
               <button className="sync-button" onClick={clearServerEntries} disabled={isServerClearing}>
                 {isServerClearing ? '削除中...' : 'サーバー予定を全削除'}
               </button>
@@ -1704,7 +1738,8 @@ export default function App() {
 
               {syncMessage ? <p className="sync-message">{syncMessage}</p> : null}
             </details>
-          </div>
+            </div>
+          </>
         ) : null}
       </header>
 
