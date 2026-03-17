@@ -10,7 +10,7 @@ type CalendarEntry = {
   category: 'quick' | 'free'
   color?: string
   time?: string
-  notifyEnabled?: boolean
+  notifyMode?: 'off' | 'time' | '15min' | '30min' | '1h' | '2h'
   googleEventId?: string
 }
 
@@ -56,12 +56,17 @@ type ColorSettings = Record<string, string>
 type DayEditor = {
   isOpen: boolean
   date: string
-  inputs: { rowId: string; value: string; color: string; time: string; notifyEnabled: boolean; entryId?: string }[]
+  inputs: { rowId: string; value: string; color: string; time: string; notifyMode: 'off' | 'time' | '15min' | '30min' | '1h' | '2h'; entryId?: string }[]
 }
 
 type TimePickerState = {
   rowId: string
   value: string
+}
+
+type ReminderModalState = {
+  rowId: string
+  selectedMode: 'off' | 'time' | '15min' | '30min' | '1h' | '2h'
 }
 
 type ModalPosition = {
@@ -199,7 +204,9 @@ function loadEntries(): CalendarEntry[] {
           typeof item.time === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(item.time)
             ? item.time
             : undefined,
-        notifyEnabled: item.notifyEnabled === true,
+        notifyMode: (item.notifyMode && ['off', 'time', '15min', '30min', '1h', '2h'].includes(item.notifyMode)) 
+          ? item.notifyMode as 'off' | 'time' | '15min' | '30min' | '1h' | '2h'
+          : 'off',
       }))
   } catch {
     return []
@@ -447,6 +454,18 @@ function modalIconByKind(kind: ConfirmModalKind): string {
   return 'ℹ'
 }
 
+function notifyModeLabel(mode: 'off' | 'time' | '15min' | '30min' | '1h' | '2h'): string {
+  const labels: Record<string, string> = {
+    off: '通知なし',
+    time: '予定時刻',
+    '15min': '15分前',
+    '30min': '30分前',
+    '1h': '1時間前',
+    '2h': '2時間前',
+  }
+  return labels[mode] ?? '通知なし'
+}
+
 export default function App() {
   const isLocalMode = useMemo(() => isLocalModeQuery(), [])
   const [authState, setAuthState] = useState<AuthState>('checking')
@@ -482,9 +501,10 @@ export default function App() {
   const [dayEditor, setDayEditor] = useState<DayEditor>({
     isOpen: false,
     date: toISODate(today),
-    inputs: [{ rowId: createId(), value: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyEnabled: false }],
+    inputs: [{ rowId: createId(), value: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyMode: 'off' }],
   })
   const [timePicker, setTimePicker] = useState<TimePickerState | null>(null)
+  const [reminderModal, setReminderModal] = useState<ReminderModalState | null>(null)
   const dayMenuRef = useRef<HTMLDivElement | null>(null)
   const modalDragRef = useRef<ModalDragState | null>(null)
 
@@ -659,7 +679,7 @@ export default function App() {
         value: entry.text,
         color: entry.color ?? DEFAULT_FREE_TEXT_COLOR,
         time: entry.time ?? '',
-        notifyEnabled: entry.notifyEnabled === true,
+        notifyMode: entry.notifyMode ?? 'off',
         entryId: entry.id,
       }))
 
@@ -669,7 +689,7 @@ export default function App() {
       inputs:
         existingRows.length > 0
           ? existingRows
-          : [{ rowId: createId(), value: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyEnabled: false }],
+          : [{ rowId: createId(), value: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyMode: 'off' }],
     })
   }
 
@@ -678,6 +698,7 @@ export default function App() {
     modalDragRef.current = null
     setModalPosition(null)
     setTimePicker(null)
+    setReminderModal(null)
     setDayEditor((prev) => ({ ...prev, isOpen: false }))
     if (syncCurrentDay) {
       void syncSingleDayWithServer(targetDate)
@@ -960,7 +981,7 @@ export default function App() {
       ...prev,
       inputs: [
         ...prev.inputs,
-        { rowId: createId(), value: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyEnabled: false },
+        { rowId: createId(), value: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyMode: 'off' },
       ],
     }))
   }
@@ -1024,26 +1045,40 @@ export default function App() {
   const resetTimePicker = () => {
     if (!timePicker) return
     updateInputTime(timePicker.rowId, '')
+    updateInputNotifyMode(timePicker.rowId, 'off')
     setTimePicker(null)
   }
 
-  const toggleInputNotify = (rowId: string) => {
-    let nextNotify = false
+  const openReminderModal = (rowId: string) => {
+    const targetRow = dayEditor.inputs.find((row) => row.rowId === rowId)
+    if (!targetRow) return
+    setReminderModal({
+      rowId,
+      selectedMode: targetRow.notifyMode,
+    })
+  }
+
+  const closeReminderModal = () => {
+    setReminderModal(null)
+  }
+
+  const confirmReminderModal = () => {
+    if (!reminderModal) return
+    const { rowId, selectedMode } = reminderModal
+    updateInputNotifyMode(rowId, selectedMode)
+    setReminderModal(null)
+  }
+
+  const updateInputNotifyMode = (rowId: string, mode: 'off' | 'time' | '15min' | '30min' | '1h' | '2h') => {
     setDayEditor((prev) => ({
       ...prev,
-      inputs: prev.inputs.map((item) => {
-        if (item.rowId !== rowId) return item
-        nextNotify = !item.notifyEnabled
-        return { ...item, notifyEnabled: nextNotify }
-      }),
+      inputs: prev.inputs.map((item) => (item.rowId === rowId ? { ...item, notifyMode: mode } : item)),
     }))
 
     const targetRow = dayEditor.inputs.find((row) => row.rowId === rowId)
     if (!targetRow?.entryId) return
     saveEntries(
-      entries.map((entry) =>
-        entry.id === targetRow.entryId ? { ...entry, notifyEnabled: !targetRow.notifyEnabled } : entry,
-      ),
+      entries.map((entry) => (entry.id === targetRow.entryId ? { ...entry, notifyMode: mode } : entry)),
     )
   }
 
@@ -1062,7 +1097,7 @@ export default function App() {
       category: 'free',
       color: targetRow.color,
       time: targetRow.time || undefined,
-      notifyEnabled: targetRow.notifyEnabled,
+      notifyMode: targetRow.notifyMode,
     }
 
     saveEntries([...entries, newEntry])
@@ -1084,7 +1119,7 @@ export default function App() {
       ...prev,
       inputs: prev.inputs.map((row) =>
         row.rowId === rowId
-          ? { ...row, value: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyEnabled: false, entryId: undefined }
+          ? { ...row, value: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyMode: 'off', entryId: undefined }
           : row,
       ),
     }))
@@ -1897,11 +1932,12 @@ export default function App() {
                     {row.time || '--:--'}
                   </button>
                   <button
-                    className={`row-action-button row-notify-toggle ${row.notifyEnabled ? 'is-active' : ''}`}
+                    className={`row-action-button row-notify-toggle ${row.notifyMode !== 'off' ? 'is-active' : ''} ${!row.time ? 'is-disabled' : ''}`}
                     type="button"
-                    onClick={() => toggleInputNotify(row.rowId)}
+                    onClick={() => openReminderModal(row.rowId)}
+                    disabled={!row.time}
                   >
-                    通知{row.notifyEnabled ? 'ON' : 'OFF'}
+                    {notifyModeLabel(row.notifyMode)}
                   </button>
                   <input
                     type="color"
@@ -1988,6 +2024,64 @@ export default function App() {
                       リセット
                     </button>
                     <button className="sync-button" type="button" onClick={confirmTimePicker}>
+                      決定
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {reminderModal ? (
+              <div className="reminder-modal-backdrop" onClick={closeReminderModal}>
+                <div className="reminder-modal" onClick={(event) => event.stopPropagation()}>
+                  <p className="reminder-modal-title">リマインダー設定</p>
+                  <div className="reminder-options-grid">
+                    <button
+                      className={`reminder-option ${reminderModal.selectedMode === 'off' ? 'is-active' : ''} ${!dayEditor.inputs.find((row) => row.rowId === reminderModal.rowId)?.time ? 'is-disabled' : ''}`}
+                      onClick={() => {
+                        const hasTime = dayEditor.inputs.find((row) => row.rowId === reminderModal.rowId)?.time
+                        if (hasTime) setReminderModal({ ...reminderModal, selectedMode: 'off' })
+                      }}
+                      disabled={!dayEditor.inputs.find((row) => row.rowId === reminderModal.rowId)?.time}
+                    >
+                      通知なし
+                    </button>
+                    <button
+                      className={`reminder-option ${reminderModal.selectedMode === 'time' ? 'is-active' : ''}`}
+                      onClick={() => setReminderModal({ ...reminderModal, selectedMode: 'time' })}
+                    >
+                      予定時刻
+                    </button>
+                    <button
+                      className={`reminder-option ${reminderModal.selectedMode === '15min' ? 'is-active' : ''}`}
+                      onClick={() => setReminderModal({ ...reminderModal, selectedMode: '15min' })}
+                    >
+                      15分前
+                    </button>
+                    <button
+                      className={`reminder-option ${reminderModal.selectedMode === '30min' ? 'is-active' : ''}`}
+                      onClick={() => setReminderModal({ ...reminderModal, selectedMode: '30min' })}
+                    >
+                      30分前
+                    </button>
+                    <button
+                      className={`reminder-option ${reminderModal.selectedMode === '1h' ? 'is-active' : ''}`}
+                      onClick={() => setReminderModal({ ...reminderModal, selectedMode: '1h' })}
+                    >
+                      1時間前
+                    </button>
+                    <button
+                      className={`reminder-option ${reminderModal.selectedMode === '2h' ? 'is-active' : ''}`}
+                      onClick={() => setReminderModal({ ...reminderModal, selectedMode: '2h' })}
+                    >
+                      2時間前
+                    </button>
+                  </div>
+                  <div className="reminder-modal-actions">
+                    <button className="nav-button" onClick={closeReminderModal}>
+                      キャンセル
+                    </button>
+                    <button className="sync-button" onClick={confirmReminderModal}>
                       決定
                     </button>
                   </div>
