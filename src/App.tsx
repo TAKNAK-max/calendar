@@ -1335,6 +1335,9 @@ export default function App() {
                   {entry.text}
                 </span>
               ))}
+              {dayEntries.length > 3 ? (
+                <span className="day-more">+{dayEntries.length - 3}</span>
+              ) : null}
             </div>
           </button>
         )
@@ -1453,7 +1456,14 @@ export default function App() {
             >
               前の月
             </button>
-            <p>{formatMonth(activeMonth)}</p>
+            <p
+              className={`month-label ${activeMonth.getFullYear() !== today.getFullYear() || activeMonth.getMonth() !== today.getMonth() ? 'is-navigable' : ''}`}
+              onClick={() => {
+                if (slidePhase !== 'idle') return
+                if (activeMonth.getFullYear() === today.getFullYear() && activeMonth.getMonth() === today.getMonth()) return
+                setActiveMonth(initialMonth)
+              }}
+            >{formatMonth(activeMonth)}</p>
             <button
               className="nav-button"
               onClick={() => jumpMonth(1)}

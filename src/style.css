@@ -88,6 +88,13 @@ select {
   font-size: clamp(0.95rem, 3.8vw, 1.2rem);
 }
 
+.month-label.is-navigable {
+  cursor: pointer;
+  color: #9aa5b8;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
 .nav-button,
 .menu-button,
 .sync-button,
@@ -481,6 +488,13 @@ select {
   gap: 0.15rem;
   overflow: hidden;
   margin-top: 0.95rem;
+}
+
+.day-more {
+  font-size: clamp(0.6rem, 2vw, 0.75rem);
+  color: var(--ink-soft);
+  text-align: center;
+  line-height: 1.2;
 }
 
 .line-tag {
