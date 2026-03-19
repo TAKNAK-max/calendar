@@ -460,6 +460,22 @@ select {
   line-height: 1;
 }
 
+.day-cell.is-sun .day-number {
+  color: #c0392b;
+}
+
+.day-cell.is-sat .day-number {
+  color: #2563b8;
+}
+
+.holiday-label {
+  display: inline-block;
+  margin-left: 0.4rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #c0392b;
+}
+
 .day-lines {
   display: grid;
   gap: 0.15rem;
@@ -930,6 +946,32 @@ select {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.backup-restore-section {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.backup-restore-label {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+}
+
+.backup-restore-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.4rem;
+}
+
+.backup-select {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  min-height: 2rem;
+  padding: 0.2rem 0.4rem;
+  font: inherit;
+  background: #fff;
 }
 
 @media (min-width: 768px) {

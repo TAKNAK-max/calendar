@@ -301,12 +301,18 @@ export default function App() {
   const [isServerSyncing, setIsServerSyncing] = useState(false)
   const [isServerClearing, setIsServerClearing] = useState(false)
   const [isApplyingQuickAction, setIsApplyingQuickAction] = useState(false)
+  const [backupDates, setBackupDates] = useState<string[]>([])
+  const [selectedBackupDate, setSelectedBackupDate] = useState('')
+  const [isRestoring, setIsRestoring] = useState(false)
   const [syncedYears, setSyncedYears] = useState<number[]>([])
   const [confirmModal, setConfirmModal] = useState<ConfirmModalState | null>(null)
   const [, setRemovedEntryIds] = useState<string[]>(() => loadRemovedIds())
   const [isSyncReminderDismissed, setIsSyncReminderDismissed] = useState(false)
   const [modalPosition, setModalPosition] = useState<ModalPosition | null>(null)
   const hasAutoSyncedRef = useRef(false)
+  const visibilitySyncRef = useRef<() => void>(() => {})
+  const lastVisibilitySyncTimeRef = useRef<number>(0)
+  const [holidays, setHolidays] = useState<Record<string, string>>({})
   const [slideDirection, setSlideDirection] = useState<-1 | 1 | 0>(0)
   const [slidePhase, setSlidePhase] = useState<'idle' | 'prep' | 'run'>('idle')
   const [slideTargetMonth, setSlideTargetMonth] = useState<Date | null>(null)
@@ -658,6 +664,31 @@ export default function App() {
 
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
+  }, [])
+
+  useEffect(() => {
+    visibilitySyncRef.current = () => {
+      if (isLocalMode || isServerSyncing || isServerClearing) return
+      const now = Date.now()
+      if (now - lastVisibilitySyncTimeRef.current < 60 * 1000) return
+      lastVisibilitySyncTimeRef.current = now
+      void syncWithServerRange()
+    }
+  })
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') visibilitySyncRef.current()
+    }
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) visibilitySyncRef.current()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('pageshow', onPageShow)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('pageshow', onPageShow)
+    }
   }, [])
 
   useEffect(() => {
@@ -1091,6 +1122,51 @@ export default function App() {
     }
   }
 
+  const fetchBackupDates = async () => {
+    try {
+      const res = await fetch(`${serverSyncUrl}/backups`, {
+        headers: { 'X-API-Key': localStorage.getItem(STORAGE_API_KEY) ?? '' },
+      })
+      if (!res.ok) return
+      const data = (await res.json()) as { dates: string[] }
+      setBackupDates(data.dates ?? [])
+      if (data.dates?.length > 0 && !selectedBackupDate) setSelectedBackupDate(data.dates[0])
+    } catch {}
+  }
+
+  const restoreFromBackup = () => {
+    if (!selectedBackupDate) return
+    setConfirmModal({
+      kind: 'warning',
+      title: 'バックアップから回復',
+      message: `${selectedBackupDate} のバックアップでサーバーを上書きします。現在のデータは失われます。続行しますか？`,
+      confirmLabel: '回復する',
+      cancelLabel: 'キャンセル',
+      onConfirm: async () => {
+        setIsRestoring(true)
+        setServerSyncMessage('バックアップから回復中...')
+        try {
+          const res = await fetch(`${serverSyncUrl}/restore`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-API-Key': localStorage.getItem(STORAGE_API_KEY) ?? '',
+            },
+            body: JSON.stringify({ date: selectedBackupDate }),
+          })
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          setServerSyncMessage(`${selectedBackupDate} から回復しました。同期中...`)
+          await syncWithServerRangeOnStartup()
+        } catch (error) {
+          const message = error instanceof Error ? error.message : '回復に失敗しました'
+          setServerSyncMessage(`エラー: ${message}`)
+        } finally {
+          setIsRestoring(false)
+        }
+      },
+    })
+  }
+
   const clearServerEntries = () => {
     setConfirmModal({
       kind: 'warning',
@@ -1173,6 +1249,27 @@ export default function App() {
       })
   }, [isLocalMode])
 
+  useEffect(() => {
+    const STORAGE_HOLIDAYS = 'futari-calendar-holidays'
+    const cached = localStorage.getItem(STORAGE_HOLIDAYS)
+    if (cached) {
+      try {
+        const { year, data } = JSON.parse(cached) as { year: number; data: Record<string, string> }
+        if (year === new Date().getFullYear()) {
+          setHolidays(data)
+          return
+        }
+      } catch {}
+    }
+    fetch('https://holidays-jp.github.io/api/v1/date.json')
+      .then((res) => res.json())
+      .then((data: Record<string, string>) => {
+        setHolidays(data)
+        localStorage.setItem(STORAGE_HOLIDAYS, JSON.stringify({ year: new Date().getFullYear(), data }))
+      })
+      .catch(() => {})
+  }, [])
+
   const todayLabel = toISODate(today)
   const activeYear = activeMonth.getFullYear()
   const needsYearSync = !isLocalMode && !syncedYears.includes(activeYear)
@@ -1199,11 +1296,15 @@ export default function App() {
         const isCurrentMonth = date.getMonth() === month.getMonth()
         const isEditing = dayEditor.isOpen && iso === dayEditor.date
         const dayEntries = entriesByDate[iso] ?? []
+        const dow = date.getDay()
+        const isHoliday = Boolean(holidays[iso])
+        const isSun = dow === 0 || isHoliday
+        const isSat = dow === 6 && !isHoliday
 
         return (
           <button
             key={`${keyPrefix}-${iso}`}
-            className={`day-cell ${isCurrentMonth ? '' : 'is-outside'} ${iso === todayLabel ? 'is-today' : ''} ${isEditing ? 'is-editing' : ''}`}
+            className={`day-cell ${isCurrentMonth ? '' : 'is-outside'} ${iso === todayLabel ? 'is-today' : ''} ${isEditing ? 'is-editing' : ''} ${isSun ? 'is-sun' : ''} ${isSat ? 'is-sat' : ''}`}
             onClick={() => openDayEditor(iso)}
           >
             <span className="day-number">{date.getDate()}</span>
@@ -1363,7 +1464,7 @@ export default function App() {
             </button>
           </div>
 
-          <button className="menu-button" aria-label="メニュー" onClick={() => setIsMenuOpen((prev) => !prev)}>
+          <button className="menu-button" aria-label="メニュー" onClick={() => { setIsMenuOpen((prev) => !prev); if (!isMenuOpen) void fetchBackupDates() }}>
             ☰
           </button>
         </div>
@@ -1440,6 +1541,27 @@ export default function App() {
               <button className="sync-button" onClick={clearServerEntries} disabled={isServerClearing}>
                 {isServerClearing ? '削除中...' : 'サーバー予定を全削除'}
               </button>
+              <div className="backup-restore-section">
+                <p className="backup-restore-label">バックアップから回復</p>
+                {backupDates.length === 0 ? (
+                  <p className="sync-message">バックアップなし</p>
+                ) : (
+                  <div className="backup-restore-row">
+                    <select
+                      className="backup-select"
+                      value={selectedBackupDate}
+                      onChange={(e) => setSelectedBackupDate(e.target.value)}
+                    >
+                      {backupDates.map((date) => (
+                        <option key={date} value={date}>{date}</option>
+                      ))}
+                    </select>
+                    <button className="sync-button" onClick={restoreFromBackup} disabled={isRestoring || !selectedBackupDate}>
+                      {isRestoring ? '回復中...' : '決定'}
+                    </button>
+                  </div>
+                )}
+              </div>
             </details>
             </div>
           </>
@@ -1552,7 +1674,10 @@ export default function App() {
                 <button className="day-move-button" onClick={() => moveDayEditor(-1)}>
                   前日
                 </button>
-                <h2>{`${dayEditor.date}（${weekdayLabel(dayEditor.date)}）`}</h2>
+                <h2>
+                  {`${dayEditor.date}（${weekdayLabel(dayEditor.date)}）`}
+                  {holidays[dayEditor.date] ? <span className="holiday-label">{holidays[dayEditor.date]}</span> : null}
+                </h2>
                 <button className="day-move-button" onClick={() => moveDayEditor(1)}>
                   翌日
                 </button>
