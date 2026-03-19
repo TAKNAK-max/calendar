@@ -36,7 +36,12 @@ function sanitizeEntry(entry) {
       typeof entry.time === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(entry.time)
         ? entry.time
         : undefined,
-    notifyEnabled: entry.notifyEnabled === true,
+    notifyMode: ['off', 'time', '15min', '30min', '1h', '2h'].includes(entry.notifyMode)
+      ? entry.notifyMode
+      : 'off',
+    notifyTo: Array.isArray(entry.notifyTo)
+      ? entry.notifyTo.filter((p) => p === 'tarchin' || p === 'yacchin')
+      : [],
     googleEventId: typeof entry.googleEventId === 'string' ? entry.googleEventId : undefined,
   }
 }

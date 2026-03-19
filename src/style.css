@@ -186,6 +186,33 @@ select {
   padding: 0.1rem;
 }
 
+.color-picker-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.apply-color-all-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink-soft);
+  cursor: pointer;
+  padding: 0.3rem;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.apply-color-all-button:hover {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
 .person-buttons {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -277,7 +304,7 @@ select {
 .confirm-modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 18;
+  z-index: 3000;
   display: grid;
   place-items: center;
   background: rgba(8, 14, 28, 0.42);
@@ -863,6 +890,46 @@ select {
 
 .reminder-modal-actions .nav-button:hover {
   background: #f5f8ff;
+}
+
+.notify-to-section {
+  margin-bottom: 1rem;
+  padding: 0.8rem;
+  background: var(--bg);
+  border-radius: 8px;
+}
+
+.notify-to-title {
+  margin: 0 0 0.6rem 0;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  font-weight: 500;
+}
+
+.notify-to-options {
+  display: flex;
+  gap: 1rem;
+}
+
+.notify-to-option {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.notify-to-option input[type='checkbox'] {
+  width: 1.1rem;
+  height: 1.1rem;
+  cursor: pointer;
+  accent-color: var(--edit-accent);
+}
+
+.row-action-button.is-delete {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 @media (min-width: 768px) {

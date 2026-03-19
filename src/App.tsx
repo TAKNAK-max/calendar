@@ -11,12 +11,8 @@ type CalendarEntry = {
   color?: string
   time?: string
   notifyMode?: 'off' | 'time' | '15min' | '30min' | '1h' | '2h'
+  notifyTo?: Person[]
   googleEventId?: string
-}
-
-type GoogleSettings = {
-  clientId: string
-  calendarId: string
 }
 
 type ServerSyncPayload = {
@@ -56,7 +52,7 @@ type ColorSettings = Record<string, string>
 type DayEditor = {
   isOpen: boolean
   date: string
-  inputs: { rowId: string; value: string; color: string; time: string; notifyMode: 'off' | 'time' | '15min' | '30min' | '1h' | '2h'; entryId?: string }[]
+  inputs: { rowId: string; value: string; color: string; time: string; notifyMode: 'off' | 'time' | '15min' | '30min' | '1h' | '2h'; notifyTo: Person[]; entryId?: string }[]
 }
 
 type TimePickerState = {
@@ -67,6 +63,7 @@ type TimePickerState = {
 type ReminderModalState = {
   rowId: string
   selectedMode: 'off' | 'time' | '15min' | '30min' | '1h' | '2h'
+  selectedNotifyTo: Person[]
 }
 
 type ModalPosition = {
@@ -90,43 +87,6 @@ type SwipeState = {
   pointerType: string
 }
 
-type TokenCache = {
-  clientId: string
-  accessToken: string
-  expiresAt: number
-}
-
-type GoogleEvent = {
-  id: string
-  summary?: string
-  start?: { date?: string }
-  extendedProperties?: {
-    private?: {
-      appSource?: string
-      localId?: string
-      person?: Person
-      category?: 'quick' | 'free'
-      color?: string
-    }
-  }
-}
-
-declare global {
-  interface Window {
-    google?: {
-      accounts?: {
-        oauth2?: {
-          initTokenClient: (config: {
-            client_id: string
-            scope: string
-            callback: (response: { access_token?: string; error?: string; expires_in?: number }) => void
-          }) => { requestAccessToken: (options?: { prompt?: string }) => void }
-        }
-      }
-    }
-  }
-}
-
 const WEEK_LABELS = ['日', '月', '火', '水', '木', '金', '土']
 const QUICK_ACTIONS: Record<Person, string[]> = {
   tarchin: ['休'],
@@ -143,12 +103,8 @@ const LEGACY_QUICK_TEXT_MAP: Record<string, string> = {
 const STORAGE_API_KEY = 'futari-calendar-api-key'
 const STORAGE_ENTRIES = 'futari-calendar-entries'
 const STORAGE_PERSON = 'futari-calendar-person'
-const STORAGE_GOOGLE = 'futari-calendar-google'
 const STORAGE_COLORS = 'futari-calendar-colors'
-const STORAGE_SYNC_URL = 'futari-calendar-sync-url'
 const STORAGE_REMOVED_IDS = 'futari-calendar-removed-ids'
-const APP_SOURCE = 'futari-calendar-web'
-const DEFAULT_GOOGLE_CLIENT_ID = '719425138729-jo1krmiqsvlopbhc3ibome39degm61d9.apps.googleusercontent.com'
 const DEFAULT_SYNC_URL = '/calendar-api'
 const DEFAULT_FREE_TEXT_COLOR = '#7a869a'
 const APP_VERSION = '0.0.2'
@@ -204,9 +160,12 @@ function loadEntries(): CalendarEntry[] {
           typeof item.time === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(item.time)
             ? item.time
             : undefined,
-        notifyMode: (item.notifyMode && ['off', 'time', '15min', '30min', '1h', '2h'].includes(item.notifyMode)) 
+        notifyMode: (item.notifyMode && ['off', 'time', '15min', '30min', '1h', '2h'].includes(item.notifyMode))
           ? item.notifyMode as 'off' | 'time' | '15min' | '30min' | '1h' | '2h'
           : 'off',
+        notifyTo: Array.isArray(item.notifyTo)
+          ? (item.notifyTo as string[]).filter((p): p is Person => ['tarchin', 'yacchin'].includes(p))
+          : [],
       }))
   } catch {
     return []
@@ -220,27 +179,6 @@ function isQuickEntry(entry: CalendarEntry): boolean {
 function loadPerson(): Person {
   const raw = localStorage.getItem(STORAGE_PERSON)
   return raw === 'yacchin' ? 'yacchin' : 'tarchin'
-}
-
-function loadGoogleSettings(): GoogleSettings {
-  const raw = localStorage.getItem(STORAGE_GOOGLE)
-  if (!raw) return { clientId: DEFAULT_GOOGLE_CLIENT_ID, calendarId: 'primary' }
-  try {
-    const parsed = JSON.parse(raw) as GoogleSettings
-    return {
-      clientId: parsed.clientId?.trim() ? parsed.clientId : DEFAULT_GOOGLE_CLIENT_ID,
-      calendarId: parsed.calendarId ?? 'primary',
-    }
-  } catch {
-    return { clientId: DEFAULT_GOOGLE_CLIENT_ID, calendarId: 'primary' }
-  }
-}
-
-function loadSyncUrl(): string {
-  const raw = localStorage.getItem(STORAGE_SYNC_URL)
-  if (!raw) return DEFAULT_SYNC_URL
-  const normalized = raw.trim()
-  return normalized || DEFAULT_SYNC_URL
 }
 
 function loadRemovedIds(): string[] {
@@ -302,21 +240,6 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`
 }
 
-function monthRange(baseMonth: Date): { timeMin: string; timeMax: string } {
-  const start = new Date(baseMonth.getFullYear(), baseMonth.getMonth(), 1)
-  const end = new Date(baseMonth.getFullYear(), baseMonth.getMonth() + 1, 1)
-  return {
-    timeMin: `${toISODate(start)}T00:00:00Z`,
-    timeMax: `${toISODate(end)}T00:00:00Z`,
-  }
-}
-
-function nextDate(date: string): string {
-  const d = new Date(`${date}T00:00:00`)
-  d.setDate(d.getDate() + 1)
-  return toISODate(d)
-}
-
 function shiftDate(date: string, diffDays: number): string {
   const d = new Date(`${date}T00:00:00`)
   d.setDate(d.getDate() + diffDays)
@@ -340,111 +263,6 @@ function createId(): string {
     return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
   }
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`
-}
-
-function ensureGoogleScript(): Promise<void> {
-  if (window.google?.accounts?.oauth2) return Promise.resolve()
-
-  return new Promise((resolve, reject) => {
-    const existing = document.querySelector<HTMLScriptElement>('script[data-google-identity="1"]')
-    if (existing) {
-      existing.addEventListener('load', () => resolve())
-      existing.addEventListener('error', () => reject(new Error('Google Identity script load error')))
-      return
-    }
-
-    const script = document.createElement('script')
-    script.src = 'https://accounts.google.com/gsi/client'
-    script.async = true
-    script.defer = true
-    script.dataset.googleIdentity = '1'
-    script.onload = () => resolve()
-    script.onerror = () => reject(new Error('Google Identity script load error'))
-    document.head.appendChild(script)
-  })
-}
-
-function requestAccessToken(
-  clientId: string,
-  prompt: '' | 'consent' = 'consent',
-): Promise<{ accessToken: string; expiresAt: number }> {
-  return new Promise((resolve, reject) => {
-    const oauth = window.google?.accounts?.oauth2
-    if (!oauth) {
-      reject(new Error('Google Identityが読み込まれていません'))
-      return
-    }
-
-    const tokenClient = oauth.initTokenClient({
-      client_id: clientId,
-      scope: 'https://www.googleapis.com/auth/calendar',
-      callback: (response) => {
-        if (response.access_token) {
-          const expiresInSeconds = response.expires_in ?? 3600
-          const expiresAt = Date.now() + Math.max(60, expiresInSeconds - 60) * 1000
-          resolve({ accessToken: response.access_token, expiresAt })
-        } else {
-          reject(new Error(response.error ?? 'アクセストークン取得に失敗しました'))
-        }
-      },
-    })
-
-    tokenClient.requestAccessToken({ prompt })
-  })
-}
-
-async function googleFetch<T>(token: string, path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`https://www.googleapis.com/calendar/v3${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-      ...(init?.headers ?? {}),
-    },
-  })
-
-  if (!response.ok) {
-    const text = await response.text()
-    throw new Error(`Google API error ${response.status}: ${text}`)
-  }
-
-  return (await response.json()) as T
-}
-
-async function listGoogleEvents(token: string, calendarId: string, targetMonth: Date): Promise<GoogleEvent[]> {
-  const { timeMin, timeMax } = monthRange(targetMonth)
-  const query = new URLSearchParams({
-    singleEvents: 'true',
-    maxResults: '2500',
-    orderBy: 'startTime',
-    timeMin,
-    timeMax,
-    privateExtendedProperty: `appSource=${APP_SOURCE}`,
-  })
-
-  const data = await googleFetch<{ items?: GoogleEvent[] }>(
-    token,
-    `/calendars/${encodeURIComponent(calendarId)}/events?${query.toString()}`,
-  )
-
-  return data.items ?? []
-}
-
-function googleEventPayload(entry: CalendarEntry) {
-  return {
-    summary: entry.text,
-    start: { date: entry.date },
-    end: { date: nextDate(entry.date) },
-    extendedProperties: {
-      private: {
-        appSource: APP_SOURCE,
-        localId: entry.id,
-        person: entry.person,
-        category: entry.category,
-        color: entry.color,
-      },
-    },
-  }
 }
 
 function modalIconByKind(kind: ConfirmModalKind): string {
@@ -475,13 +293,10 @@ export default function App() {
   const [activeMonth, setActiveMonth] = useState(initialMonth)
   const [entries, setEntries] = useState<CalendarEntry[]>(() => loadEntries())
   const [selectedPerson, setSelectedPerson] = useState<Person>(() => loadPerson())
-  const [googleSettings, setGoogleSettings] = useState<GoogleSettings>(() => loadGoogleSettings())
   const [colorSettings, setColorSettings] = useState<ColorSettings>(() => loadColorSettings())
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [activeColorTarget, setActiveColorTarget] = useState<string | null>(null)
-  const [syncMessage, setSyncMessage] = useState('')
-  const [isSyncing, setIsSyncing] = useState(false)
-  const [serverSyncUrl, setServerSyncUrl] = useState(() => loadSyncUrl())
+  const serverSyncUrl = DEFAULT_SYNC_URL
   const [serverSyncMessage, setServerSyncMessage] = useState('')
   const [isServerSyncing, setIsServerSyncing] = useState(false)
   const [isServerClearing, setIsServerClearing] = useState(false)
@@ -491,7 +306,6 @@ export default function App() {
   const [, setRemovedEntryIds] = useState<string[]>(() => loadRemovedIds())
   const [isSyncReminderDismissed, setIsSyncReminderDismissed] = useState(false)
   const [modalPosition, setModalPosition] = useState<ModalPosition | null>(null)
-  const tokenCacheRef = useRef<TokenCache | null>(null)
   const hasAutoSyncedRef = useRef(false)
   const [slideDirection, setSlideDirection] = useState<-1 | 1 | 0>(0)
   const [slidePhase, setSlidePhase] = useState<'idle' | 'prep' | 'run'>('idle')
@@ -501,7 +315,7 @@ export default function App() {
   const [dayEditor, setDayEditor] = useState<DayEditor>({
     isOpen: false,
     date: toISODate(today),
-    inputs: [{ rowId: createId(), value: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyMode: 'off' }],
+    inputs: [{ rowId: createId(), value: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyMode: 'off', notifyTo: [] }],
   })
   const [timePicker, setTimePicker] = useState<TimePickerState | null>(null)
   const [reminderModal, setReminderModal] = useState<ReminderModalState | null>(null)
@@ -548,19 +362,6 @@ export default function App() {
     const normalized = normalizeColorSettings(next)
     setColorSettings(normalized)
     localStorage.setItem(STORAGE_COLORS, JSON.stringify(normalized))
-  }
-
-  const updateGoogleSettings = (nextSettings: GoogleSettings) => {
-    if (nextSettings.clientId.trim() !== googleSettings.clientId.trim()) {
-      tokenCacheRef.current = null
-    }
-    setGoogleSettings(nextSettings)
-    localStorage.setItem(STORAGE_GOOGLE, JSON.stringify(nextSettings))
-  }
-
-  const updateServerSyncUrl = (url: string) => {
-    setServerSyncUrl(url)
-    localStorage.setItem(STORAGE_SYNC_URL, url)
   }
 
   const postServerSync = async (startYear: number, endYear: number, targetEntries: CalendarEntry[]) => {
@@ -680,6 +481,7 @@ export default function App() {
         color: entry.color ?? DEFAULT_FREE_TEXT_COLOR,
         time: entry.time ?? '',
         notifyMode: entry.notifyMode ?? 'off',
+        notifyTo: entry.notifyTo ?? [],
         entryId: entry.id,
       }))
 
@@ -689,7 +491,7 @@ export default function App() {
       inputs:
         existingRows.length > 0
           ? existingRows
-          : [{ rowId: createId(), value: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyMode: 'off' }],
+          : [{ rowId: createId(), value: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyMode: 'off', notifyTo: [] }],
     })
   }
 
@@ -981,7 +783,7 @@ export default function App() {
       ...prev,
       inputs: [
         ...prev.inputs,
-        { rowId: createId(), value: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyMode: 'off' },
+        { rowId: createId(), value: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyMode: 'off', notifyTo: [] },
       ],
     }))
   }
@@ -1055,6 +857,7 @@ export default function App() {
     setReminderModal({
       rowId,
       selectedMode: targetRow.notifyMode,
+      selectedNotifyTo: targetRow.notifyTo.length > 0 ? targetRow.notifyTo : [selectedPerson],
     })
   }
 
@@ -1064,21 +867,22 @@ export default function App() {
 
   const confirmReminderModal = () => {
     if (!reminderModal) return
-    const { rowId, selectedMode } = reminderModal
-    updateInputNotifyMode(rowId, selectedMode)
+    const { rowId, selectedMode, selectedNotifyTo } = reminderModal
+    updateInputNotifyMode(rowId, selectedMode, selectedNotifyTo)
     setReminderModal(null)
   }
 
-  const updateInputNotifyMode = (rowId: string, mode: 'off' | 'time' | '15min' | '30min' | '1h' | '2h') => {
+  const updateInputNotifyMode = (rowId: string, mode: 'off' | 'time' | '15min' | '30min' | '1h' | '2h', notifyTo: Person[] = []) => {
+    const effectiveNotifyTo = mode === 'off' ? [] : notifyTo
     setDayEditor((prev) => ({
       ...prev,
-      inputs: prev.inputs.map((item) => (item.rowId === rowId ? { ...item, notifyMode: mode } : item)),
+      inputs: prev.inputs.map((item) => (item.rowId === rowId ? { ...item, notifyMode: mode, notifyTo: effectiveNotifyTo } : item)),
     }))
 
     const targetRow = dayEditor.inputs.find((row) => row.rowId === rowId)
     if (!targetRow?.entryId) return
     saveEntries(
-      entries.map((entry) => (entry.id === targetRow.entryId ? { ...entry, notifyMode: mode } : entry)),
+      entries.map((entry) => (entry.id === targetRow.entryId ? { ...entry, notifyMode: mode, notifyTo: effectiveNotifyTo } : entry)),
     )
   }
 
@@ -1098,6 +902,7 @@ export default function App() {
       color: targetRow.color,
       time: targetRow.time || undefined,
       notifyMode: targetRow.notifyMode,
+      notifyTo: targetRow.notifyTo.length > 0 ? targetRow.notifyTo : undefined,
     }
 
     saveEntries([...entries, newEntry])
@@ -1119,7 +924,7 @@ export default function App() {
       ...prev,
       inputs: prev.inputs.map((row) =>
         row.rowId === rowId
-          ? { ...row, value: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyMode: 'off', entryId: undefined }
+          ? { ...row, value: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyMode: 'off', notifyTo: [], entryId: undefined }
           : row,
       ),
     }))
@@ -1134,117 +939,17 @@ export default function App() {
     })
   }
 
-  const syncWithGoogle = async () => {
-    if (!googleSettings.clientId.trim()) {
-      setSyncMessage('Google OAuth Client IDを入力してください')
-      return
-    }
-
-    setIsSyncing(true)
-    setSyncMessage('同期中...')
-
-    try {
-      await ensureGoogleScript()
-      const clientId = googleSettings.clientId.trim()
-      let token = ''
-      const cached = tokenCacheRef.current
-      if (cached && cached.clientId === clientId && cached.expiresAt > Date.now()) {
-        token = cached.accessToken
-      } else {
-        let issued
-        try {
-          issued = await requestAccessToken(clientId, '')
-        } catch {
-          issued = await requestAccessToken(clientId, 'consent')
-        }
-        tokenCacheRef.current = {
-          clientId,
-          accessToken: issued.accessToken,
-          expiresAt: issued.expiresAt,
-        }
-        token = issued.accessToken
-      }
-      const calendarId = googleSettings.calendarId.trim() || 'primary'
-
-      const monthEntries = entries.filter(
-        (entry) =>
-          new Date(`${entry.date}T00:00:00`).getFullYear() === activeMonth.getFullYear() &&
-          new Date(`${entry.date}T00:00:00`).getMonth() === activeMonth.getMonth(),
-      )
-
-      const googleEvents = await listGoogleEvents(token, calendarId, activeMonth)
-      const googleById = new Map(googleEvents.map((item) => [item.id, item]))
-
-      const syncedMonthEntries: CalendarEntry[] = []
-
-      for (const entry of monthEntries) {
-        const payload = googleEventPayload(entry)
-        if (entry.googleEventId && googleById.has(entry.googleEventId)) {
-          const updated = await googleFetch<GoogleEvent>(
-            token,
-            `/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(entry.googleEventId)}`,
-            {
-              method: 'PATCH',
-              body: JSON.stringify(payload),
-            },
-          )
-          syncedMonthEntries.push({ ...entry, googleEventId: updated.id })
-        } else {
-          const created = await googleFetch<GoogleEvent>(
-            token,
-            `/calendars/${encodeURIComponent(calendarId)}/events`,
-            {
-              method: 'POST',
-              body: JSON.stringify(payload),
-            },
-          )
-          syncedMonthEntries.push({ ...entry, googleEventId: created.id })
-        }
-      }
-
-      const latestGoogleEvents = await listGoogleEvents(token, calendarId, activeMonth)
-      const latestLocalFromGoogle: CalendarEntry[] = latestGoogleEvents
-        .filter((event) => event.start?.date && event.summary)
-        .map((event) => {
-          const privateProps = event.extendedProperties?.private
-          const person: Person = privateProps?.person === 'yacchin' ? 'yacchin' : 'tarchin'
-          return {
-            id: privateProps?.localId ?? `google-${event.id}`,
-            date: event.start!.date!,
-            text: event.summary!,
-            person,
-            category: privateProps?.category === 'quick' ? 'quick' : 'free',
-            color: privateProps?.color,
-            googleEventId: event.id,
-          }
-        })
-
-      const nextEntries = [
-        ...entries.filter(
-          (entry) =>
-            !(
-              new Date(`${entry.date}T00:00:00`).getFullYear() === activeMonth.getFullYear() &&
-              new Date(`${entry.date}T00:00:00`).getMonth() === activeMonth.getMonth()
-            ),
-        ),
-        ...latestLocalFromGoogle,
-      ]
-
-      saveEntries(nextEntries)
-      setSyncMessage(`同期完了: ${formatMonth(activeMonth)} (${latestLocalFromGoogle.length}件)`)
-
-      if (syncedMonthEntries.length === 0 && latestLocalFromGoogle.length === 0) {
-        setSyncMessage(`同期完了: ${formatMonth(activeMonth)} は空でした`)
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '同期に失敗しました'
-      setSyncMessage(`エラー: ${message}`)
-    } finally {
-      setIsSyncing(false)
-    }
+  const applyColorToAllEntries = (action: string) => {
+    const color = colorSettings[actionKey(selectedPerson, action)]
+    if (!color) return
+    const updated = entries.map((entry) =>
+      entry.person === selectedPerson && entry.text === action ? { ...entry, color } : entry,
+    )
+    saveEntries(updated)
+    void syncWithServerRange(updated)
   }
 
-  const syncWithServerRange = async () => {
+  const syncWithServerRange = async (entriesOverride?: CalendarEntry[]) => {
     if (isLocalMode) {
       setServerSyncMessage('ローカルモードのためサーバー同期は無効です')
       return
@@ -1263,7 +968,8 @@ export default function App() {
     setServerSyncMessage(`同期中: ${startYear}年〜${endYear}年`)
 
     try {
-      const rangeEntries = entries.filter((entry) => {
+      const baseEntries = entriesOverride ?? entries
+      const rangeEntries = baseEntries.filter((entry) => {
         const year = new Date(`${entry.date}T00:00:00`).getFullYear()
         return year >= startYear && year <= endYear
       })
@@ -1271,7 +977,7 @@ export default function App() {
       const data = await postServerSync(startYear, endYear, rangeEntries)
       const years = new Set(data.years ?? [])
       const merged = [
-        ...entries.filter((entry) => {
+        ...baseEntries.filter((entry) => {
           const year = new Date(`${entry.date}T00:00:00`).getFullYear()
           return year < startYear || year > endYear
         }),
@@ -1696,29 +1402,31 @@ export default function App() {
                 ))}
               </div>
               {activeColorTarget ? (
-                <label className="color-picker-row">
+                <div className="color-picker-row">
                   <span>{activeColorTarget}の色</span>
-                  <input
-                    type="color"
-                    value={colorSettings[actionKey(selectedPerson, activeColorTarget)]}
-                    onChange={(event) => updateActionColor(activeColorTarget, event.target.value)}
-                  />
-                </label>
+                  <div className="color-picker-controls">
+                    <input
+                      type="color"
+                      value={colorSettings[actionKey(selectedPerson, activeColorTarget)]}
+                      onChange={(event) => updateActionColor(activeColorTarget, event.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="apply-color-all-button"
+                      title={`全期間の${activeColorTarget}にこの色を適用`}
+                      onClick={() => applyColorToAllEntries(activeColorTarget)}
+                    >
+                      <svg viewBox="0 0 24 24" fill="currentColor" width="1.1em" height="1.1em">
+                        <path d="M16.56 8.94L7.62 0 6.21 1.41l2.38 2.38-5.15 5.15c-.59.59-.59 1.54 0 2.12l5.5 5.5c.29.29.68.44 1.06.44s.77-.15 1.06-.44l5.5-5.5c.59-.58.59-1.53 0-2.12zM5.21 10L10 5.21 14.79 10H5.21zM19 11.5s-2 2.17-2 3.5c0 1.1.9 2 2 2s2-.9 2-2c0-1.33-2-3.5-2-3.5z" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
               ) : null}
             </div>
 
-            <label>
-              同期サーバーURL
-              <input
-                type="text"
-                value={serverSyncUrl}
-                onChange={(event) => updateServerSyncUrl(event.target.value)}
-                placeholder="/calendar-api"
-              />
-            </label>
-
-            <button className="sync-button" onClick={syncWithServerRange} disabled={isServerSyncing}>
-              {isServerSyncing ? '3年分 同期中...' : '前後1年を同期'}
+            <button className="sync-button" onClick={() => syncWithServerRange()} disabled={isServerSyncing}>
+              {isServerSyncing ? '3年分 同期中...' : '前後１年をサーバーと同期'}
             </button>
 
             {serverSyncMessage ? <p className="sync-message">{serverSyncMessage}</p> : null}
@@ -1732,46 +1440,6 @@ export default function App() {
               <button className="sync-button" onClick={clearServerEntries} disabled={isServerClearing}>
                 {isServerClearing ? '削除中...' : 'サーバー予定を全削除'}
               </button>
-            </details>
-
-            <details className="google-sync-panel">
-              <summary>Google同期（必要時のみ）</summary>
-
-              <label>
-                Google OAuth Client ID
-                <input
-                  type="text"
-                  value={googleSettings.clientId}
-                  onChange={(event) =>
-                    updateGoogleSettings({
-                      ...googleSettings,
-                      clientId: event.target.value,
-                    })
-                  }
-                  placeholder="xxxx.apps.googleusercontent.com"
-                />
-              </label>
-
-              <label>
-                Calendar ID
-                <input
-                  type="text"
-                  value={googleSettings.calendarId}
-                  onChange={(event) =>
-                    updateGoogleSettings({
-                      ...googleSettings,
-                      calendarId: event.target.value,
-                    })
-                  }
-                  placeholder="primary"
-                />
-              </label>
-
-              <button className="sync-button" onClick={syncWithGoogle} disabled={isSyncing}>
-                {isSyncing ? '同期中...' : 'Google同期'}
-              </button>
-
-              {syncMessage ? <p className="sync-message">{syncMessage}</p> : null}
             </details>
             </div>
           </>
@@ -1841,8 +1509,8 @@ export default function App() {
             </div>
             <p>{activeYear}年は未同期です。</p>
             <p>前後1年を同期してから編集してください。</p>
-            <button className="sync-button" onClick={syncWithServerRange} disabled={isServerSyncing}>
-              {isServerSyncing ? '3年分 同期中...' : '前後1年を同期'}
+            <button className="sync-button" onClick={() => syncWithServerRange()} disabled={isServerSyncing}>
+              {isServerSyncing ? '3年分 同期中...' : '前後１年をサーバーと同期'}
             </button>
             {serverSyncMessage ? <p className="sync-message">{serverSyncMessage}</p> : null}
           </div>
@@ -1945,12 +1613,31 @@ export default function App() {
                     value={row.color}
                     onChange={(event) => updateInputColor(row.rowId, event.target.value)}
                   />
-                  <button
-                    className={`row-action-button ${row.entryId ? 'is-delete' : 'is-decide'}`}
-                    onClick={() => (row.entryId ? deleteInputRowEntry(row.rowId) : submitInputRow(row.rowId))}
-                  >
-                    {row.entryId ? '削除' : '決定'}
-                  </button>
+                  {!row.entryId ? (
+                    <button className="row-action-button is-decide" onClick={() => submitInputRow(row.rowId)}>
+                      決定
+                    </button>
+                  ) : null}
+                  {row.entryId ? (
+                    <button
+                      className="row-action-button is-delete"
+                      title="予定を削除"
+                      onClick={() =>
+                        setConfirmModal({
+                          kind: 'warning',
+                          title: '予定を削除',
+                          message: '本当に削除しますか？',
+                          confirmLabel: 'はい',
+                          cancelLabel: 'いいえ',
+                          onConfirm: () => deleteInputRowEntry(row.rowId),
+                        })
+                      }
+                    >
+                      <svg viewBox="0 0 24 24" fill="currentColor" width="1.1em" height="1.1em">
+                        <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
+                      </svg>
+                    </button>
+                  ) : null}
                 </div>
               ))}
             </div>
@@ -2077,6 +1764,30 @@ export default function App() {
                       2時間前
                     </button>
                   </div>
+                  {reminderModal.selectedMode !== 'off' ? (
+                    <div className="notify-to-section">
+                      <p className="notify-to-title">通知先</p>
+                      <div className="notify-to-options">
+                        {(['tarchin', 'yacchin'] as Person[]).map((person) => (
+                          <label key={person} className="notify-to-option">
+                            <input
+                              type="checkbox"
+                              checked={reminderModal.selectedNotifyTo.includes(person)}
+                              onChange={(e) =>
+                                setReminderModal({
+                                  ...reminderModal,
+                                  selectedNotifyTo: e.target.checked
+                                    ? [...reminderModal.selectedNotifyTo, person]
+                                    : reminderModal.selectedNotifyTo.filter((p) => p !== person),
+                                })
+                              }
+                            />
+                            {person === 'tarchin' ? 'たーちん' : 'やっちん'}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                   <div className="reminder-modal-actions">
                     <button className="nav-button" onClick={closeReminderModal}>
                       キャンセル
