@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+// excel is loaded dynamically to keep initial bundle size small
 
 type Person = 'tarchin' | 'yacchin'
 
@@ -305,6 +306,11 @@ export default function App() {
   const [selectedBackupDate, setSelectedBackupDate] = useState('')
   const [isRestoring, setIsRestoring] = useState(false)
   const [syncedYears, setSyncedYears] = useState<number[]>([])
+  const [exportYear, setExportYear] = useState(today.getFullYear())
+  const [isExporting, setIsExporting] = useState(false)
+  const [isImporting, setIsImporting] = useState(false)
+  const [excelMessage, setExcelMessage] = useState('')
+  const importFileRef = useRef<HTMLInputElement | null>(null)
   const [confirmModal, setConfirmModal] = useState<ConfirmModalState | null>(null)
   const [, setRemovedEntryIds] = useState<string[]>(() => loadRemovedIds())
   const [isSyncReminderDismissed, setIsSyncReminderDismissed] = useState(false)
@@ -1167,6 +1173,64 @@ export default function App() {
     })
   }
 
+  const handleExport = async () => {
+    setIsExporting(true)
+    setExcelMessage('')
+    try {
+      const { exportToExcel } = await import('./excel')
+      await exportToExcel(exportYear, entries)
+      setExcelMessage(`${exportYear}年をエクスポートしました`)
+    } catch (err) {
+      setExcelMessage(`エクスポート失敗: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setIsExporting(false)
+    }
+  }
+
+  const handleImport = async (file: File) => {
+    setIsImporting(true)
+    setExcelMessage('')
+    try {
+      const { importFromExcel } = await import('./excel')
+      const { entries: imported } = await importFromExcel(file)
+      if (imported.length === 0) {
+        setExcelMessage('インポートできる予定が見つかりませんでした')
+        return
+      }
+
+      // 既存と重複しない予定だけ追加（日付+内容+person が一致するものはスキップ）
+      const existing = loadEntries()
+      const existingKeys = new Set(existing.map((e) => `${e.date}|${e.text}|${e.person}`))
+      const newEntries = imported.filter((e) => !existingKeys.has(`${e.date}|${e.text}|${e.person}`))
+      const skipped = imported.length - newEntries.length
+
+      if (newEntries.length === 0) {
+        setExcelMessage(`全て重複のためスキップ（${skipped}件）`)
+        return
+      }
+
+      const merged = [...existing, ...newEntries]
+      localStorage.setItem(STORAGE_ENTRIES, JSON.stringify(merged))
+      setEntries(merged)
+
+      // サーバーと同期
+      const years = Array.from(new Set(newEntries.map((e) => Number(e.date.slice(0, 4)))))
+      for (const year of years) {
+        await postServerSync(year, year, merged.filter((e) => Number(e.date.slice(0, 4)) === year))
+      }
+
+      const msg = skipped > 0
+        ? `${newEntries.length}件をインポートしました（重複${skipped}件スキップ）`
+        : `${newEntries.length}件をインポートしました`
+      setExcelMessage(msg)
+    } catch (err) {
+      setExcelMessage(`インポート失敗: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setIsImporting(false)
+      if (importFileRef.current) importFileRef.current.value = ''
+    }
+  }
+
   const clearServerEntries = () => {
     setConfirmModal({
       kind: 'warning',
@@ -1534,6 +1598,37 @@ export default function App() {
                   </div>
                 </div>
               ) : null}
+            </div>
+
+            <div className="excel-section">
+              <p className="excel-label">Excelエクスポート</p>
+              <div className="excel-row">
+                <select
+                  className="backup-select"
+                  value={exportYear}
+                  onChange={(e) => setExportYear(Number(e.target.value))}
+                >
+                  {[today.getFullYear() - 1, today.getFullYear(), today.getFullYear() + 1, today.getFullYear() + 2].map((y) => (
+                    <option key={y} value={y}>{y}年</option>
+                  ))}
+                </select>
+                <button className="sync-button" onClick={handleExport} disabled={isExporting}>
+                  {isExporting ? '出力中...' : 'ダウンロード'}
+                </button>
+              </div>
+              <p className="excel-label" style={{ marginTop: '0.75rem' }}>Excelインポート</p>
+              <input
+                ref={importFileRef}
+                type="file"
+                accept=".xlsx"
+                className="excel-file-input"
+                disabled={isImporting}
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) void handleImport(file)
+                }}
+              />
+              {excelMessage ? <p className="sync-message">{excelMessage}</p> : null}
             </div>
 
             <button className="sync-button" onClick={() => syncWithServerRange()} disabled={isServerSyncing}>

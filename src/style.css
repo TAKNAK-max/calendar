@@ -988,6 +988,31 @@ select {
   background: #fff;
 }
 
+.excel-section {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+}
+
+.excel-label {
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+  margin-bottom: 0.4rem;
+}
+
+.excel-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.4rem;
+}
+
+.excel-file-input {
+  width: 100%;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
 @media (min-width: 768px) {
   .app-shell {
     max-width: 1100px;
