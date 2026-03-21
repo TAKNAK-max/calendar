@@ -113,13 +113,13 @@ export async function exportToExcel(year: number, entries: CalendarEntry[]): Pro
 
     // Header row
     const headers: string[] = [
-      '日', '曜日', 'たーちん（休）', 'やっちん',
+      '日', '曜日', 'たーちん（休）', 'やっちん（出勤）',
       ...Array.from({ length: MAX_FREE_ENTRIES }, (_, i) => [
         `内容${i + 1}`, `誰${i + 1}`, `時間${i + 1}`, `通知${i + 1}`, `通知先${i + 1}`,
       ]).flat(),
     ]
     const headerRow = ws.getRow(HEADER_ROW)
-    headerRow.values = [undefined, ...headers] // ExcelJS rows are 1-indexed, col 1 = index 1
+    headerRow.values = headers
     headers.forEach((_, idx) => {
       const cell = ws.getCell(HEADER_ROW, idx + 1)
       cell.font = { bold: true }
