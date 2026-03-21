@@ -1686,9 +1686,11 @@ export default function App() {
             <h3>{confirmModal.title}</h3>
             <p>{confirmModal.message}</p>
             <div className="confirm-modal-actions">
-              <button className="nav-button" onClick={() => setConfirmModal(null)}>
-                {confirmModal.cancelLabel}
-              </button>
+              {confirmModal.cancelLabel ? (
+                <button className="nav-button" onClick={() => setConfirmModal(null)}>
+                  {confirmModal.cancelLabel}
+                </button>
+              ) : null}
               <button
                 className="sync-button"
                 onClick={async () => {
