@@ -1110,6 +1110,26 @@ select {
   border-radius: 8px;
 }
 
+.line-notify-test-button {
+  border: 1px solid #06C755;
+  background: #06C755;
+  color: #fff;
+  border-radius: 8px;
+  min-height: 2.1rem;
+  padding: 0.3rem 0.9rem;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+}
+
+.line-notify-test-button:hover {
+  background: #05b34c;
+  border-color: #05b34c;
+}
+
 .free-input-time-row {
   display: flex;
   align-items: center;
