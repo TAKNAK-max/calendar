@@ -31,9 +31,7 @@ body {
   min-width: 320px;
   overflow: hidden;
   color: var(--ink-strong);
-  background:
-    radial-gradient(circle at 90% 0%, #ffd8c4 0%, transparent 26%),
-    linear-gradient(180deg, #fff3e5 0%, #f5f8ff 100%);
+  background: #f0f2f5;
 }
 
 button,
@@ -60,8 +58,8 @@ select {
 .app-header {
   position: relative;
   z-index: 5;
-  background: color-mix(in oklab, var(--surface), #f9f7f3 18%);
-  border: 1px solid var(--line);
+  background: #1a2437;
+  border: 1px solid #1a2437;
   border-radius: 14px;
   padding: 0.55rem;
 }
@@ -86,11 +84,12 @@ select {
   text-align: center;
   font-weight: 700;
   font-size: clamp(0.95rem, 3.8vw, 1.2rem);
+  color: #f0f4fa;
 }
 
 .month-label.is-navigable {
   cursor: pointer;
-  color: #9aa5b8;
+  color: #7a8faa;
   text-decoration: underline dotted;
   text-underline-offset: 3px;
 }
@@ -109,6 +108,15 @@ select {
   border-radius: 10px;
 }
 
+.app-header .nav-button,
+.app-header .menu-button,
+.app-header .sync-button,
+.app-header .person-button {
+  background: #253048;
+  border-color: #3a4a62;
+  color: #cdd5e0;
+}
+
 .nav-button {
   min-height: 2.15rem;
   padding: 0.3rem 0.55rem;
@@ -124,7 +132,7 @@ select {
   position: fixed;
   inset: 0;
   z-index: 16;
-  background: rgba(8, 14, 28, 0.35);
+  background: rgba(8, 14, 28, 0.65);
 }
 
 .menu-panel {
@@ -372,7 +380,7 @@ select {
   min-height: 0;
   height: 100%;
   overflow: hidden;
-  background: color-mix(in oklab, var(--surface), #f8fbff 18%);
+  background: #fff;
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 0.5rem;
@@ -532,7 +540,7 @@ select {
   position: fixed;
   inset: 0;
   z-index: 20;
-  background: rgba(8, 14, 28, 0.5);
+  background: rgba(8, 14, 28, 0.72);
   display: grid;
   place-items: center;
   padding: 0.75rem;
@@ -540,8 +548,8 @@ select {
 
 .day-menu {
   width: min(520px, 100%);
-  background: #fff;
-  border: 1px solid var(--line);
+  background: #f0f2f5;
+  border: 1px solid #2e3e55;
   border-radius: 14px;
   padding: 0.7rem;
   display: grid;
@@ -555,6 +563,10 @@ select {
   gap: 0.5rem;
   cursor: grab;
   user-select: none;
+  background: #1a2437;
+  margin: -0.7rem -0.7rem 0 -0.7rem;
+  padding: 0.7rem;
+  border-radius: 14px 14px 0 0;
 }
 
 .day-menu-head button {
@@ -564,6 +576,7 @@ select {
 .day-menu-head h2 {
   margin: 0;
   font-size: 1rem;
+  color: #f0f4fa;
 }
 
 .day-nav {
@@ -573,12 +586,18 @@ select {
 }
 
 .day-move-button {
-  border: 1px solid var(--line);
-  background: #fff;
-  color: var(--ink-strong);
+  border: 1px solid #3a4a62;
+  background: #253048;
+  color: #cdd5e0;
   border-radius: 8px;
   min-height: 1.9rem;
   padding: 0.2rem 0.55rem;
+}
+
+.day-menu-head .close-button {
+  background: #253048;
+  border-color: #3a4a62;
+  color: #cdd5e0;
 }
 
 .close-button {
@@ -607,6 +626,9 @@ select {
 .inputs-area {
   display: grid;
   gap: 0.35rem;
+  background: #fff;
+  border-radius: 10px;
+  padding: 0.5rem;
 }
 
 .input-row {
@@ -742,9 +764,7 @@ select {
   display: grid;
   place-items: center;
   padding: 0.75rem;
-  background:
-    radial-gradient(circle at 90% 0%, #ffd8c4 0%, transparent 26%),
-    linear-gradient(180deg, #fff3e5 0%, #f5f8ff 100%);
+  background: #f0f2f5;
 }
 
 .auth-card {
@@ -960,6 +980,294 @@ select {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.free-input-trigger {
+  flex: 1;
+  min-width: 0;
+  min-height: 2rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink-strong);
+  text-align: left;
+  font: inherit;
+  font-size: 0.9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.free-input-trigger.is-placeholder {
+  color: #9aa5b8;
+}
+
+.free-input-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 35;
+  display: grid;
+  place-items: center;
+  background: rgba(8, 14, 28, 0.65);
+  padding: 0.75rem;
+  overscroll-behavior: none;
+  touch-action: none;
+}
+
+.free-input-modal {
+  width: min(480px, 100%);
+  max-width: 100%;
+  background: #f0f2f5;
+  border: 1px solid #2e3e55;
+  border-radius: 14px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  display: grid;
+}
+
+.free-input-modal-head {
+  background: #1a2437;
+  padding: 0.7rem 0.85rem;
+}
+
+.free-input-modal-head h3 {
+  margin: 0;
+  font-size: 1rem;
+  color: #f0f4fa;
+}
+
+.free-input-modal-body {
+  padding: 0.75rem 0.85rem;
+  display: grid;
+  gap: 0.6rem;
+  background: #f0f2f5;
+}
+
+.free-input-modal-label {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.free-input-modal-label span {
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+
+.free-input-modal-text {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  min-height: 2.2rem;
+  padding: 0.35rem 0.55rem;
+  font: inherit;
+  background: #fff;
+  width: 100%;
+}
+
+.free-input-modal-textarea {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.35rem 0.55rem;
+  font: inherit;
+  background: #fff;
+  width: 100%;
+  resize: vertical;
+  line-height: 1.55;
+}
+
+.free-input-modal-text[readonly],
+.free-input-modal-textarea[readonly],
+.free-input-modal-text-readonly {
+  background: #eef0f3;
+  color: var(--ink-soft);
+}
+
+.free-input-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  padding: 0.6rem 0.85rem;
+  background: #f0f2f5;
+  border-top: 1px solid var(--line);
+}
+
+.free-input-modal-actions .sync-button {
+  background: #1a2437;
+  border-color: #1a2437;
+  color: #f0f4fa;
+  font-weight: 700;
+  min-height: 2.1rem;
+  padding: 0.3rem 1rem;
+  border-radius: 8px;
+}
+
+.free-input-modal-actions .nav-button {
+  min-height: 2.1rem;
+  padding: 0.3rem 1rem;
+  border-radius: 8px;
+}
+
+.free-input-time-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+
+.free-input-modal-time {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  min-height: 2.2rem;
+  padding: 0.3rem 0.55rem;
+  font: inherit;
+  background: #fff;
+  width: auto;
+}
+
+.free-input-modal-time[readonly] {
+  background: #eef0f3;
+  color: var(--ink-soft);
+}
+
+.free-input-notify-select {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  min-height: 2.2rem;
+  padding: 0.3rem 0.55rem;
+  font: inherit;
+  background: #fff;
+  width: 100%;
+  color: var(--ink-strong);
+}
+
+.free-input-notify-to {
+  display: flex;
+  gap: 1rem;
+  margin-top: 0.35rem;
+  padding: 0.4rem 0.5rem;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.free-input-modal-color-row input[type='color'] {
+  width: 3rem;
+  height: 2.2rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.1rem;
+  cursor: pointer;
+}
+
+/* Free entries area in day editor */
+.free-entries-area {
+  display: grid;
+  gap: 0.3rem;
+  background: #fff;
+  border-radius: 10px;
+  padding: 0.45rem 0.5rem;
+}
+
+.free-entry-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 5.2rem 5.5rem 2.2rem;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.free-entry-text {
+  min-height: 2rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f7f9fc;
+  color: var(--ink-strong);
+  text-align: left;
+  font: inherit;
+  font-size: 0.9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.free-entry-text:hover {
+  background: #eef2fa;
+  border-color: #b0bcda;
+}
+
+.free-entry-time,
+.free-entry-notify {
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  text-align: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.25rem 0.35rem;
+  background: #f7f9fc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+.row-action-button.is-delete {
+  min-height: 2rem;
+  min-width: 2.2rem;
+  padding: 0.2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.free-add-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 4rem 5.5rem 2.2rem;
+  gap: 0.35rem;
+  align-items: center;
+  padding: 0.2rem 0;
+  border-top: 1px dashed var(--line);
+  margin-top: 0.1rem;
+}
+
+.free-add-label {
+  font-size: 0.88rem;
+  color: #9aa5b8;
+  padding-left: 0.5rem;
+}
+
+.free-add-time {
+  font-size: 0.85rem;
+  color: #b0bccc;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.free-add-notify {
+  font-size: 0.8rem;
+  color: #b0bccc;
+  text-align: center;
+}
+
+.free-add-button {
+  border: 1px solid var(--edit-accent);
+  background: color-mix(in oklab, #fff, #d8e8ff 55%);
+  color: var(--edit-accent);
+  border-radius: 8px;
+  min-height: 2rem;
+  min-width: 2.2rem;
+  padding: 0.2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.free-add-button:hover {
+  background: color-mix(in oklab, #fff, #b8d0ff 60%);
 }
 
 .backup-restore-section {

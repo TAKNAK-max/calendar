@@ -7,6 +7,7 @@ type CalendarEntry = {
   id: string
   date: string
   text: string
+  memo?: string
   person: Person
   category: 'quick' | 'free'
   color?: string
@@ -53,18 +54,18 @@ type ColorSettings = Record<string, string>
 type DayEditor = {
   isOpen: boolean
   date: string
-  inputs: { rowId: string; value: string; color: string; time: string; notifyMode: 'off' | 'time' | '15min' | '30min' | '1h' | '2h'; notifyTo: Person[]; entryId?: string }[]
+  inputs: { rowId: string; value: string; memo: string; color: string; time: string; notifyMode: 'off' | 'time' | '15min' | '30min' | '1h' | '2h'; notifyTo: Person[]; entryId?: string }[]
 }
 
-type TimePickerState = {
-  rowId: string
-  value: string
-}
-
-type ReminderModalState = {
-  rowId: string
-  selectedMode: 'off' | 'time' | '15min' | '30min' | '1h' | '2h'
-  selectedNotifyTo: Person[]
+type FreeInputModalState = {
+  rowId: string | null
+  text: string
+  memo: string
+  color: string
+  time: string
+  notifyMode: 'off' | 'time' | '15min' | '30min' | '1h' | '2h'
+  notifyTo: Person[]
+  isReadOnly: boolean
 }
 
 type ModalPosition = {
@@ -327,19 +328,36 @@ export default function App() {
   const [dayEditor, setDayEditor] = useState<DayEditor>({
     isOpen: false,
     date: toISODate(today),
-    inputs: [{ rowId: createId(), value: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyMode: 'off', notifyTo: [] }],
+    inputs: [{ rowId: createId(), value: '', memo: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyMode: 'off', notifyTo: [] }],
   })
-  const [timePicker, setTimePicker] = useState<TimePickerState | null>(null)
-  const [reminderModal, setReminderModal] = useState<ReminderModalState | null>(null)
+  const [freeInputModal, setFreeInputModal] = useState<FreeInputModalState | null>(null)
   const dayMenuRef = useRef<HTMLDivElement | null>(null)
   const modalDragRef = useRef<ModalDragState | null>(null)
 
   const entriesByDate = useMemo(() => {
-    return entries.reduce<Record<string, CalendarEntry[]>>((acc, entry) => {
+    const quickRank = (entry: CalendarEntry): number => {
+      if (entry.category !== 'quick') return Infinity
+      const tarchinList = QUICK_ACTIONS['tarchin']
+      const yacchinList = QUICK_ACTIONS['yacchin']
+      if (entry.person === 'tarchin') {
+        const idx = tarchinList.indexOf(entry.text)
+        return idx >= 0 ? idx : tarchinList.length
+      }
+      const idx = yacchinList.indexOf(entry.text)
+      return tarchinList.length + (idx >= 0 ? idx : yacchinList.length)
+    }
+
+    const grouped = entries.reduce<Record<string, CalendarEntry[]>>((acc, entry) => {
       if (!acc[entry.date]) acc[entry.date] = []
       acc[entry.date].push(entry)
       return acc
     }, {})
+
+    for (const date of Object.keys(grouped)) {
+      grouped[date].sort((a, b) => quickRank(a) - quickRank(b))
+    }
+
+    return grouped
   }, [entries])
 
   const saveEntries = (nextEntries: CalendarEntry[]) => {
@@ -490,6 +508,7 @@ export default function App() {
       .map((entry) => ({
         rowId: createId(),
         value: entry.text,
+        memo: entry.memo ?? '',
         color: entry.color ?? DEFAULT_FREE_TEXT_COLOR,
         time: entry.time ?? '',
         notifyMode: entry.notifyMode ?? 'off',
@@ -500,10 +519,7 @@ export default function App() {
     setDayEditor({
       isOpen: true,
       date,
-      inputs:
-        existingRows.length > 0
-          ? existingRows
-          : [{ rowId: createId(), value: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyMode: 'off', notifyTo: [] }],
+      inputs: existingRows,
     })
   }
 
@@ -511,8 +527,7 @@ export default function App() {
     const targetDate = dayEditor.date
     modalDragRef.current = null
     setModalPosition(null)
-    setTimePicker(null)
-    setReminderModal(null)
+    setFreeInputModal(null)
     setDayEditor((prev) => ({ ...prev, isOpen: false }))
     if (syncCurrentDay) {
       void syncSingleDayWithServer(targetDate)
@@ -815,140 +830,62 @@ export default function App() {
     }
   }
 
-  const addInputBox = () => {
-    setDayEditor((prev) => ({
-      ...prev,
-      inputs: [
-        ...prev.inputs,
-        { rowId: createId(), value: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyMode: 'off', notifyTo: [] },
-      ],
-    }))
-  }
-
-  const removeInputBox = () => {
-    setDayEditor((prev) => {
-      if (prev.inputs.length <= 1) return prev
-      const removableIndex = [...prev.inputs]
-        .map((row, index) => ({ row, index }))
-        .reverse()
-        .find((item) => !item.row.entryId)?.index
-
-      if (removableIndex === undefined) return prev
-      return { ...prev, inputs: prev.inputs.filter((_, index) => index !== removableIndex) }
+  const openAddEntryModal = () => {
+    setFreeInputModal({
+      rowId: null,
+      text: '',
+      memo: '',
+      color: DEFAULT_FREE_TEXT_COLOR,
+      time: '',
+      notifyMode: 'off',
+      notifyTo: [],
+      isReadOnly: false,
     })
   }
 
-  const updateInput = (rowId: string, value: string) => {
-    setDayEditor((prev) => ({
-      ...prev,
-      inputs: prev.inputs.map((item) => (item.rowId === rowId ? { ...item, value } : item)),
-    }))
-  }
-
-  const updateInputColor = (rowId: string, color: string) => {
-    setDayEditor((prev) => ({
-      ...prev,
-      inputs: prev.inputs.map((item) => (item.rowId === rowId ? { ...item, color } : item)),
-    }))
-
-    const targetRow = dayEditor.inputs.find((row) => row.rowId === rowId)
-    if (!targetRow?.entryId) return
-    saveEntries(entries.map((entry) => (entry.id === targetRow.entryId ? { ...entry, color } : entry)))
-  }
-
-  const updateInputTime = (rowId: string, time: string) => {
-    setDayEditor((prev) => ({
-      ...prev,
-      inputs: prev.inputs.map((item) => (item.rowId === rowId ? { ...item, time } : item)),
-    }))
-
-    const targetRow = dayEditor.inputs.find((row) => row.rowId === rowId)
-    if (!targetRow?.entryId) return
-    saveEntries(entries.map((entry) => (entry.id === targetRow.entryId ? { ...entry, time: time || undefined } : entry)))
-  }
-
-  const openTimePicker = (rowId: string, value: string) => {
-    setTimePicker({ rowId, value })
-  }
-
-  const closeTimePicker = () => {
-    setTimePicker(null)
-  }
-
-  const confirmTimePicker = () => {
-    if (!timePicker) return
-    updateInputTime(timePicker.rowId, timePicker.value)
-    setTimePicker(null)
-  }
-
-  const resetTimePicker = () => {
-    if (!timePicker) return
-    updateInputTime(timePicker.rowId, '')
-    updateInputNotifyMode(timePicker.rowId, 'off')
-    setTimePicker(null)
-  }
-
-  const openReminderModal = (rowId: string) => {
-    const targetRow = dayEditor.inputs.find((row) => row.rowId === rowId)
-    if (!targetRow) return
-    setReminderModal({
+  const openFreeInputModal = (rowId: string) => {
+    const row = dayEditor.inputs.find((r) => r.rowId === rowId)
+    if (!row) return
+    setFreeInputModal({
       rowId,
-      selectedMode: targetRow.notifyMode,
-      selectedNotifyTo: targetRow.notifyTo.length > 0 ? targetRow.notifyTo : [selectedPerson],
+      text: row.value,
+      memo: row.memo,
+      color: row.color,
+      time: row.time,
+      notifyMode: row.notifyMode,
+      notifyTo: row.notifyTo,
+      isReadOnly: true,
     })
   }
 
-  const closeReminderModal = () => {
-    setReminderModal(null)
-  }
-
-  const confirmReminderModal = () => {
-    if (!reminderModal) return
-    const { rowId, selectedMode, selectedNotifyTo } = reminderModal
-    updateInputNotifyMode(rowId, selectedMode, selectedNotifyTo)
-    setReminderModal(null)
-  }
-
-  const updateInputNotifyMode = (rowId: string, mode: 'off' | 'time' | '15min' | '30min' | '1h' | '2h', notifyTo: Person[] = []) => {
-    const effectiveNotifyTo = mode === 'off' ? [] : notifyTo
-    setDayEditor((prev) => ({
-      ...prev,
-      inputs: prev.inputs.map((item) => (item.rowId === rowId ? { ...item, notifyMode: mode, notifyTo: effectiveNotifyTo } : item)),
-    }))
-
-    const targetRow = dayEditor.inputs.find((row) => row.rowId === rowId)
-    if (!targetRow?.entryId) return
-    saveEntries(
-      entries.map((entry) => (entry.id === targetRow.entryId ? { ...entry, notifyMode: mode, notifyTo: effectiveNotifyTo } : entry)),
-    )
-  }
-
-  const submitInputRow = (rowId: string) => {
-    const targetRow = dayEditor.inputs.find((row) => row.rowId === rowId)
-    if (!targetRow || targetRow.entryId) return
-
-    const trimmed = targetRow.value.trim()
+  const confirmFreeInputModal = () => {
+    if (!freeInputModal || freeInputModal.isReadOnly) return
+    const { text, memo, color, time, notifyMode, notifyTo } = freeInputModal
+    const trimmed = text.trim()
     if (!trimmed) return
 
     const newEntry: CalendarEntry = {
       id: createId(),
       date: dayEditor.date,
       text: trimmed,
+      memo: memo.trim() || undefined,
       person: selectedPerson,
       category: 'free',
-      color: targetRow.color,
-      time: targetRow.time || undefined,
-      notifyMode: targetRow.notifyMode,
-      notifyTo: targetRow.notifyTo.length > 0 ? targetRow.notifyTo : undefined,
+      color,
+      time: time || undefined,
+      notifyMode,
+      notifyTo: notifyTo.length > 0 ? notifyTo : undefined,
     }
 
     saveEntries([...entries, newEntry])
     setDayEditor((prev) => ({
       ...prev,
-      inputs: prev.inputs.map((row) =>
-        row.rowId === rowId ? { ...row, value: trimmed, entryId: newEntry.id } : row,
-      ),
+      inputs: [
+        ...prev.inputs,
+        { rowId: createId(), value: trimmed, memo, color, time, notifyMode, notifyTo, entryId: newEntry.id },
+      ],
     }))
+    setFreeInputModal(null)
   }
 
   const deleteInputRowEntry = (rowId: string) => {
@@ -959,11 +896,7 @@ export default function App() {
     saveEntries(entries.filter((entry) => entry.id !== targetRow.entryId))
     setDayEditor((prev) => ({
       ...prev,
-      inputs: prev.inputs.map((row) =>
-        row.rowId === rowId
-          ? { ...row, value: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyMode: 'off', notifyTo: [], entryId: undefined }
-          : row,
-      ),
+      inputs: prev.inputs.filter((row) => row.rowId !== rowId),
     }))
   }
 
@@ -1816,215 +1749,215 @@ export default function App() {
               ))}
             </div>
 
-            <div className="inputs-area">
+            <div className="free-entries-area">
               {dayEditor.inputs.map((row) => (
-                <div key={row.rowId} className="input-row">
-                  <input
-                    type="text"
-                    value={row.value}
-                    placeholder="自由入力"
-                    readOnly={Boolean(row.entryId)}
-                    onChange={(event) => updateInput(row.rowId, event.target.value)}
-                  />
-                  <button type="button" className="row-time-input row-time-button" onClick={() => openTimePicker(row.rowId, row.time)}>
-                    {row.time || '--:--'}
-                  </button>
+                <div key={row.rowId} className="free-entry-row">
                   <button
-                    className={`row-action-button row-notify-toggle ${row.notifyMode !== 'off' ? 'is-active' : ''} ${!row.time ? 'is-disabled' : ''}`}
                     type="button"
-                    onClick={() => openReminderModal(row.rowId)}
-                    disabled={!row.time}
+                    className="free-entry-text"
+                    onClick={() => openFreeInputModal(row.rowId)}
+                    style={row.color ? {
+                      borderColor: row.color,
+                      borderWidth: '2px',
+                      backgroundColor: hexToRgba(row.color, 0.08),
+                      color: row.color,
+                      fontWeight: 600,
+                    } : undefined}
                   >
-                    {notifyModeLabel(row.notifyMode)}
+                    {row.value}
                   </button>
-                  <input
-                    type="color"
-                    className="row-color-picker"
-                    value={row.color}
-                    onChange={(event) => updateInputColor(row.rowId, event.target.value)}
-                  />
-                  {!row.entryId ? (
-                    <button className="row-action-button is-decide" onClick={() => submitInputRow(row.rowId)}>
-                      決定
-                    </button>
-                  ) : null}
-                  {row.entryId ? (
-                    <button
-                      className="row-action-button is-delete"
-                      title="予定を削除"
-                      onClick={() =>
-                        setConfirmModal({
-                          kind: 'warning',
-                          title: '予定を削除',
-                          message: '本当に削除しますか？',
-                          confirmLabel: 'はい',
-                          cancelLabel: 'いいえ',
-                          onConfirm: () => deleteInputRowEntry(row.rowId),
-                        })
-                      }
-                    >
-                      <svg viewBox="0 0 24 24" fill="currentColor" width="1.1em" height="1.1em">
-                        <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
+                  <span className="free-entry-time">
+                    <svg viewBox="0 0 24 24" fill="currentColor" width="1.1em" height="1.1em" style={{ verticalAlign: 'text-top', marginRight: '0.2em' }}>
+                      <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7z"/>
+                    </svg>
+                    {row.time || '--:--'}
+                  </span>
+                  <span className={`free-entry-notify${row.notifyMode !== 'off' ? ' is-active' : ''}`}>
+                    {row.notifyMode !== 'off' ? (
+                      <svg viewBox="0 0 24 24" fill="currentColor" width="1.1em" height="1.1em" style={{ verticalAlign: 'text-top', marginRight: '0.2em' }}>
+                        <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6V11c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/>
                       </svg>
-                    </button>
-                  ) : null}
+                    ) : null}
+                    {notifyModeLabel(row.notifyMode)}
+                  </span>
+                  <button
+                    className="row-action-button is-delete"
+                    title="予定を削除"
+                    onClick={() =>
+                      setConfirmModal({
+                        kind: 'warning',
+                        title: '予定を削除',
+                        message: '本当に削除しますか？',
+                        confirmLabel: 'はい',
+                        cancelLabel: 'いいえ',
+                        onConfirm: () => deleteInputRowEntry(row.rowId),
+                      })
+                    }
+                  >
+                    <svg viewBox="0 0 24 24" fill="currentColor" width="1.1em" height="1.1em">
+                      <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
+                    </svg>
+                  </button>
                 </div>
               ))}
-            </div>
-
-            <div className="actions-row">
-              <button className="plus-minus" onClick={addInputBox}>
-                ＋
-              </button>
-              {dayEditor.inputs.length > 1 && dayEditor.inputs.some((row) => !row.entryId) ? (
-                <button className="plus-minus" onClick={removeInputBox}>
-                  －
+              <div className="free-add-row">
+                <span className="free-add-label">予定なし</span>
+                <span className="free-add-time">--:--</span>
+                <span className="free-add-notify">通知なし</span>
+                <button className="free-add-button" title="予定を追加" onClick={openAddEntryModal}>
+                  <svg viewBox="0 0 24 24" fill="currentColor" width="1.1em" height="1.1em">
+                    <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm17.71-10.21a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
+                  </svg>
                 </button>
-              ) : null}
+              </div>
             </div>
 
-            {timePicker ? (
-              <div className="time-modal-backdrop" onClick={closeTimePicker}>
-                <div className="time-modal" onClick={(event) => event.stopPropagation()}>
-                  <div className="time-picker-row">
-                    <select
-                      className="time-select"
-                      value={timePicker.value ? timePicker.value.slice(0, 2) : ''}
-                      onChange={(event) => {
-                        const hour = event.target.value
-                        setTimePicker((prev) => {
-                          if (!prev) return prev
-                          const minute = prev.value ? prev.value.slice(3, 5) : '00'
-                          if (!hour) return { ...prev, value: '' }
-                          return { ...prev, value: `${hour}:${minute}` }
-                        })
-                      }}
-                      autoFocus
-                    >
-                      <option value="">--</option>
-                      {Array.from({ length: 24 }, (_, idx) => {
-                        const v = String(idx).padStart(2, '0')
-                        return (
-                          <option key={v} value={v}>
-                            {v}
-                          </option>
-                        )
-                      })}
-                    </select>
-                    <span className="time-colon">:</span>
-                    <select
-                      className="time-select"
-                      value={timePicker.value ? timePicker.value.slice(3, 5) : ''}
-                      onChange={(event) => {
-                        const minute = event.target.value
-                        setTimePicker((prev) => {
-                          if (!prev) return prev
-                          const hour = prev.value ? prev.value.slice(0, 2) : '00'
-                          if (!minute) return { ...prev, value: '' }
-                          return { ...prev, value: `${hour}:${minute}` }
-                        })
-                      }}
-                    >
-                      <option value="">--</option>
-                      {Array.from({ length: 60 }, (_, idx) => {
-                        const v = String(idx).padStart(2, '0')
-                        return (
-                          <option key={v} value={v}>
-                            {v}
-                          </option>
-                        )
-                      })}
-                    </select>
+            {freeInputModal ? (
+              <div className="free-input-modal-backdrop" onClick={() => setFreeInputModal(null)}>
+                <div className="free-input-modal" onClick={(event) => event.stopPropagation()}>
+                  <div className="free-input-modal-head">
+                    <h3>{freeInputModal.isReadOnly ? '予定の確認' : '予定の入力'}</h3>
                   </div>
-                  <div className="time-modal-actions">
-                    <button className="row-action-button" type="button" onClick={resetTimePicker}>
-                      リセット
-                    </button>
-                    <button className="sync-button" type="button" onClick={confirmTimePicker}>
-                      決定
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ) : null}
-
-            {reminderModal ? (
-              <div className="reminder-modal-backdrop" onClick={closeReminderModal}>
-                <div className="reminder-modal" onClick={(event) => event.stopPropagation()}>
-                  <p className="reminder-modal-title">リマインダー設定</p>
-                  <div className="reminder-options-grid">
-                    <button
-                      className={`reminder-option ${reminderModal.selectedMode === 'off' ? 'is-active' : ''} ${!dayEditor.inputs.find((row) => row.rowId === reminderModal.rowId)?.time ? 'is-disabled' : ''}`}
-                      onClick={() => {
-                        const hasTime = dayEditor.inputs.find((row) => row.rowId === reminderModal.rowId)?.time
-                        if (hasTime) setReminderModal({ ...reminderModal, selectedMode: 'off' })
-                      }}
-                      disabled={!dayEditor.inputs.find((row) => row.rowId === reminderModal.rowId)?.time}
-                    >
-                      通知なし
-                    </button>
-                    <button
-                      className={`reminder-option ${reminderModal.selectedMode === 'time' ? 'is-active' : ''}`}
-                      onClick={() => setReminderModal({ ...reminderModal, selectedMode: 'time' })}
-                    >
-                      予定時刻
-                    </button>
-                    <button
-                      className={`reminder-option ${reminderModal.selectedMode === '15min' ? 'is-active' : ''}`}
-                      onClick={() => setReminderModal({ ...reminderModal, selectedMode: '15min' })}
-                    >
-                      15分前
-                    </button>
-                    <button
-                      className={`reminder-option ${reminderModal.selectedMode === '30min' ? 'is-active' : ''}`}
-                      onClick={() => setReminderModal({ ...reminderModal, selectedMode: '30min' })}
-                    >
-                      30分前
-                    </button>
-                    <button
-                      className={`reminder-option ${reminderModal.selectedMode === '1h' ? 'is-active' : ''}`}
-                      onClick={() => setReminderModal({ ...reminderModal, selectedMode: '1h' })}
-                    >
-                      1時間前
-                    </button>
-                    <button
-                      className={`reminder-option ${reminderModal.selectedMode === '2h' ? 'is-active' : ''}`}
-                      onClick={() => setReminderModal({ ...reminderModal, selectedMode: '2h' })}
-                    >
-                      2時間前
-                    </button>
-                  </div>
-                  {reminderModal.selectedMode !== 'off' ? (
-                    <div className="notify-to-section">
-                      <p className="notify-to-title">通知先</p>
-                      <div className="notify-to-options">
-                        {(['tarchin', 'yacchin'] as Person[]).map((person) => (
-                          <label key={person} className="notify-to-option">
-                            <input
-                              type="checkbox"
-                              checked={reminderModal.selectedNotifyTo.includes(person)}
-                              onChange={(e) =>
-                                setReminderModal({
-                                  ...reminderModal,
-                                  selectedNotifyTo: e.target.checked
-                                    ? [...reminderModal.selectedNotifyTo, person]
-                                    : reminderModal.selectedNotifyTo.filter((p) => p !== person),
-                                })
-                              }
-                            />
-                            {person === 'tarchin' ? 'たーちん' : 'やっちん'}
-                          </label>
-                        ))}
+                  <div className="free-input-modal-body">
+                    <label className="free-input-modal-label">
+                      <span>予定</span>
+                      <input
+                        type="text"
+                        className="free-input-modal-text"
+                        value={freeInputModal.text}
+                        readOnly={freeInputModal.isReadOnly}
+                        placeholder="予定を入力"
+                        autoFocus
+                        style={freeInputModal.color ? {
+                          borderColor: freeInputModal.color,
+                          borderWidth: '2px',
+                          backgroundColor: hexToRgba(freeInputModal.color, 0.08),
+                          color: freeInputModal.color,
+                          fontWeight: 600,
+                        } : undefined}
+                        onChange={(e) => setFreeInputModal((prev) => (prev ? { ...prev, text: e.target.value } : null))}
+                      />
+                    </label>
+                    <div className="free-input-modal-label">
+                      <span>時間</span>
+                      <div className="free-input-time-row">
+                        {freeInputModal.isReadOnly ? (
+                          <span className="free-input-modal-text free-input-modal-text-readonly">
+                            {freeInputModal.time || '--:--'}
+                          </span>
+                        ) : (
+                          <input
+                            type="time"
+                            className="free-input-modal-time"
+                            value={freeInputModal.time}
+                            onChange={(e) =>
+                              setFreeInputModal((prev) =>
+                                prev ? { ...prev, time: e.target.value, notifyMode: e.target.value ? prev.notifyMode : 'off', notifyTo: e.target.value ? prev.notifyTo : [] } : null,
+                              )
+                            }
+                          />
+                        )}
+                        {!freeInputModal.isReadOnly && freeInputModal.time ? (
+                          <button
+                            type="button"
+                            className="row-action-button is-delete"
+                            title="時間をクリア"
+                            onClick={() =>
+                              setFreeInputModal((prev) =>
+                                prev ? { ...prev, time: '', notifyMode: 'off', notifyTo: [] } : null
+                              )
+                            }
+                          >
+                            <svg viewBox="0 0 24 24" fill="currentColor" width="1.1em" height="1.1em">
+                              <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
+                            </svg>
+                          </button>
+                        ) : null}
                       </div>
                     </div>
-                  ) : null}
-                  <div className="reminder-modal-actions">
-                    <button className="nav-button" onClick={closeReminderModal}>
-                      キャンセル
-                    </button>
-                    <button className="sync-button" onClick={confirmReminderModal}>
-                      決定
-                    </button>
+                    {(freeInputModal.time || freeInputModal.isReadOnly) ? (
+                    <div className="free-input-modal-label">
+                      <span>通知</span>
+                      <select
+                        className="free-input-notify-select"
+                        value={freeInputModal.notifyMode}
+                        disabled={freeInputModal.isReadOnly}
+                        onChange={(e) =>
+                          setFreeInputModal((prev) =>
+                            prev ? { ...prev, notifyMode: e.target.value as FreeInputModalState['notifyMode'] } : null
+                          )
+                        }
+                      >
+                        {(['off', 'time', '15min', '30min', '1h', '2h'] as const).map((mode) => (
+                          <option key={mode} value={mode}>
+                            {notifyModeLabel(mode)}
+                          </option>
+                        ))}
+                      </select>
+                      {freeInputModal.notifyMode !== 'off' ? (
+                        <div className="free-input-notify-to">
+                          {(['tarchin', 'yacchin'] as Person[]).map((person) => (
+                            <label key={person} className="notify-to-option">
+                              <input
+                                type="checkbox"
+                                checked={freeInputModal.notifyTo.includes(person)}
+                                disabled={freeInputModal.isReadOnly}
+                                onChange={(e) =>
+                                  setFreeInputModal((prev) => {
+                                    if (!prev) return null
+                                    return {
+                                      ...prev,
+                                      notifyTo: e.target.checked
+                                        ? [...prev.notifyTo, person]
+                                        : prev.notifyTo.filter((p) => p !== person),
+                                    }
+                                  })
+                                }
+                              />
+                              {person === 'tarchin' ? 'たーちん' : 'やっちん'}
+                            </label>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                    ) : null}
+                    {!freeInputModal.isReadOnly ? (
+                      <label className="free-input-modal-label free-input-modal-color-row">
+                        <span>色</span>
+                        <input
+                          type="color"
+                          value={freeInputModal.color}
+                          onChange={(e) => setFreeInputModal((prev) => (prev ? { ...prev, color: e.target.value } : null))}
+                        />
+                      </label>
+                    ) : null}
+                    <label className="free-input-modal-label">
+                      <span>メモ</span>
+                      <textarea
+                        className="free-input-modal-textarea"
+                        value={freeInputModal.memo}
+                        readOnly={freeInputModal.isReadOnly}
+                        placeholder="メモ（任意）"
+                        rows={4}
+                        onChange={(e) => setFreeInputModal((prev) => (prev ? { ...prev, memo: e.target.value } : null))}
+                      />
+                    </label>
+                  </div>
+                  <div className="free-input-modal-actions">
+                    {freeInputModal.isReadOnly ? (
+                      <button className="nav-button" onClick={() => setFreeInputModal(null)}>
+                        戻る
+                      </button>
+                    ) : (
+                      <>
+                        <button className="nav-button" onClick={() => setFreeInputModal(null)}>
+                          キャンセル
+                        </button>
+                        <button className="sync-button" onClick={confirmFreeInputModal}>
+                          決定
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
