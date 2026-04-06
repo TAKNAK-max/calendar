@@ -153,7 +153,6 @@ function sanitizeEntry(entry) {
     notifyTo: Array.isArray(entry.notifyTo)
       ? entry.notifyTo.filter((p) => p === 'tarchin' || p === 'yacchin')
       : [],
-    googleEventId: typeof entry.googleEventId === 'string' ? entry.googleEventId : undefined,
   }
 }
 

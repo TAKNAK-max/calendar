@@ -14,7 +14,6 @@ type CalendarEntry = {
   time?: string
   notifyMode?: 'off' | 'time' | '15min' | '30min' | '1h' | '2h'
   notifyTo?: Person[]
-  googleEventId?: string
 }
 
 type ServerSyncPayload = {
@@ -54,7 +53,7 @@ type ColorSettings = Record<string, string>
 type DayEditor = {
   isOpen: boolean
   date: string
-  inputs: { rowId: string; value: string; memo: string; color: string; time: string; notifyMode: 'off' | 'time' | '15min' | '30min' | '1h' | '2h'; notifyTo: Person[]; entryId?: string }[]
+  inputs: { rowId: string; value: string; memo: string; color: string; time: string; notifyMode: 'off' | 'time' | '15min' | '30min' | '1h' | '2h'; notifyTo: Person[]; entryId?: string; person: Person }[]
 }
 
 type FreeInputModalState = {
@@ -65,7 +64,16 @@ type FreeInputModalState = {
   time: string
   notifyMode: 'off' | 'time' | '15min' | '30min' | '1h' | '2h'
   notifyTo: Person[]
-  isReadOnly: boolean
+  mode: 'readonly' | 'edit' | 'new'
+}
+
+type ClipboardEntry = {
+  text: string
+  memo: string
+  color: string
+  time: string
+  notifyMode: 'off' | 'time' | '15min' | '30min' | '1h' | '2h'
+  notifyTo: Person[]
 }
 
 type ModalPosition = {
@@ -328,9 +336,11 @@ export default function App() {
   const [dayEditor, setDayEditor] = useState<DayEditor>({
     isOpen: false,
     date: toISODate(today),
-    inputs: [{ rowId: createId(), value: '', memo: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyMode: 'off', notifyTo: [] }],
+    inputs: [{ rowId: createId(), value: '', memo: '', color: DEFAULT_FREE_TEXT_COLOR, time: '', notifyMode: 'off', notifyTo: [], person: 'tarchin' }],
   })
   const [freeInputModal, setFreeInputModal] = useState<FreeInputModalState | null>(null)
+  const [clipboardEntry, setClipboardEntry] = useState<ClipboardEntry | null>(null)
+  const [copiedRowId, setCopiedRowId] = useState<string | null>(null)
   const dayMenuRef = useRef<HTMLDivElement | null>(null)
   const modalDragRef = useRef<ModalDragState | null>(null)
 
@@ -339,12 +349,12 @@ export default function App() {
       if (entry.category !== 'quick') return Infinity
       const tarchinList = QUICK_ACTIONS['tarchin']
       const yacchinList = QUICK_ACTIONS['yacchin']
-      if (entry.person === 'tarchin') {
-        const idx = tarchinList.indexOf(entry.text)
-        return idx >= 0 ? idx : tarchinList.length
+      if (entry.person === 'yacchin') {
+        const idx = yacchinList.indexOf(entry.text)
+        return idx >= 0 ? idx : yacchinList.length
       }
-      const idx = yacchinList.indexOf(entry.text)
-      return tarchinList.length + (idx >= 0 ? idx : yacchinList.length)
+      const idx = tarchinList.indexOf(entry.text)
+      return yacchinList.length + (idx >= 0 ? idx : tarchinList.length)
     }
 
     const grouped = entries.reduce<Record<string, CalendarEntry[]>>((acc, entry) => {
@@ -514,6 +524,7 @@ export default function App() {
         notifyMode: entry.notifyMode ?? 'off',
         notifyTo: entry.notifyTo ?? [],
         entryId: entry.id,
+        person: entry.person,
       }))
 
     setDayEditor({
@@ -839,7 +850,7 @@ export default function App() {
       time: '',
       notifyMode: 'off',
       notifyTo: [],
-      isReadOnly: false,
+      mode: 'new',
     })
   }
 
@@ -854,12 +865,12 @@ export default function App() {
       time: row.time,
       notifyMode: row.notifyMode,
       notifyTo: row.notifyTo,
-      isReadOnly: true,
+      mode: 'readonly',
     })
   }
 
   const confirmFreeInputModal = () => {
-    if (!freeInputModal || freeInputModal.isReadOnly) return
+    if (!freeInputModal || freeInputModal.mode !== 'new') return
     const { text, memo, color, time, notifyMode, notifyTo } = freeInputModal
     const trimmed = text.trim()
     if (!trimmed) return
@@ -882,10 +893,40 @@ export default function App() {
       ...prev,
       inputs: [
         ...prev.inputs,
-        { rowId: createId(), value: trimmed, memo, color, time, notifyMode, notifyTo, entryId: newEntry.id },
+        { rowId: createId(), value: trimmed, memo, color, time, notifyMode, notifyTo, entryId: newEntry.id, person: selectedPerson },
       ],
     }))
     setFreeInputModal(null)
+  }
+
+  const updateFreeInputModal = () => {
+    if (!freeInputModal || freeInputModal.mode !== 'edit' || !freeInputModal.rowId) return
+    const { rowId, text, memo, color, time, notifyMode, notifyTo } = freeInputModal
+    const trimmed = text.trim()
+    if (!trimmed) return
+
+    const targetRow = dayEditor.inputs.find((r) => r.rowId === rowId)
+    if (!targetRow?.entryId) return
+
+    const updatedEntry: Partial<CalendarEntry> = {
+      text: trimmed,
+      memo: memo.trim() || undefined,
+      color,
+      time: time || undefined,
+      notifyMode,
+      notifyTo: notifyTo.length > 0 ? notifyTo : undefined,
+    }
+    saveEntries(entries.map((e) => e.id === targetRow.entryId ? { ...e, ...updatedEntry } : e))
+    setDayEditor((prev) => ({
+      ...prev,
+      inputs: prev.inputs.map((r) =>
+        r.rowId === rowId
+          ? { ...r, value: trimmed, memo, color, time, notifyMode, notifyTo }
+          : r
+      ),
+    }))
+    setFreeInputModal(null)
+    void syncSingleDayWithServer(dayEditor.date)
   }
 
   const deleteInputRowEntry = (rowId: string) => {
@@ -898,6 +939,56 @@ export default function App() {
       ...prev,
       inputs: prev.inputs.filter((row) => row.rowId !== rowId),
     }))
+  }
+
+  const copyEntry = (rowId: string) => {
+    const row = dayEditor.inputs.find((r) => r.rowId === rowId)
+    if (!row) return
+    setClipboardEntry({
+      text: row.value,
+      memo: row.memo,
+      color: row.color,
+      time: row.time,
+      notifyMode: row.notifyMode,
+      notifyTo: row.notifyTo,
+    })
+    setCopiedRowId(rowId)
+    setTimeout(() => setCopiedRowId(null), 1000)
+  }
+
+  const pasteEntry = () => {
+    if (!clipboardEntry) return
+    const newEntry: CalendarEntry = {
+      id: createId(),
+      date: dayEditor.date,
+      text: clipboardEntry.text,
+      memo: clipboardEntry.memo.trim() || undefined,
+      person: selectedPerson,
+      category: 'free',
+      color: clipboardEntry.color,
+      time: clipboardEntry.time || undefined,
+      notifyMode: clipboardEntry.notifyMode,
+      notifyTo: clipboardEntry.notifyTo.length > 0 ? clipboardEntry.notifyTo : undefined,
+    }
+    saveEntries([...entries, newEntry])
+    setDayEditor((prev) => ({
+      ...prev,
+      inputs: [
+        ...prev.inputs,
+        {
+          rowId: createId(),
+          value: newEntry.text,
+          memo: clipboardEntry.memo,
+          color: clipboardEntry.color,
+          time: clipboardEntry.time,
+          notifyMode: clipboardEntry.notifyMode,
+          notifyTo: clipboardEntry.notifyTo,
+          entryId: newEntry.id,
+          person: selectedPerson,
+        },
+      ],
+    }))
+    void syncSingleDayWithServer(dayEditor.date)
   }
 
   const updateActionColor = (action: string, color: string) => {
@@ -1783,18 +1874,37 @@ export default function App() {
                     {notifyModeLabel(row.notifyMode)}
                   </span>
                   <button
+                    className={`row-action-button ${copiedRowId === row.rowId ? 'is-copy-done' : 'is-copy'}`}
+                    title={copiedRowId === row.rowId ? 'コピーしました' : '予定をコピー'}
+                    onClick={() => copyEntry(row.rowId)}
+                  >
+                    {copiedRowId === row.rowId ? (
+                      <svg viewBox="0 0 24 24" fill="currentColor" width="1.1em" height="1.1em">
+                        <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>
+                      </svg>
+                    ) : (
+                      <svg viewBox="0 0 24 24" fill="currentColor" width="1.1em" height="1.1em">
+                        <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+                      </svg>
+                    )}
+                  </button>
+                  <button
                     className="row-action-button is-delete"
                     title="予定を削除"
-                    onClick={() =>
+                    onClick={() => {
+                      const isOther = row.person !== selectedPerson
+                      const otherLabel = row.person === 'tarchin' ? 'たーちん' : 'やっちん'
                       setConfirmModal({
                         kind: 'warning',
                         title: '予定を削除',
-                        message: '本当に削除しますか？',
+                        message: isOther
+                          ? `これは${otherLabel}の予定です。本当に削除しますか？`
+                          : '本当に削除しますか？',
                         confirmLabel: 'はい',
                         cancelLabel: 'いいえ',
                         onConfirm: () => deleteInputRowEntry(row.rowId),
                       })
-                    }
+                    }}
                   >
                     <svg viewBox="0 0 24 24" fill="currentColor" width="1.1em" height="1.1em">
                       <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
@@ -1811,6 +1921,17 @@ export default function App() {
                     <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm17.71-10.21a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
                   </svg>
                 </button>
+                <button
+                  className="free-add-button"
+                  title={clipboardEntry !== null ? `「${clipboardEntry.text}」を貼り付け` : 'コピーされた予定がありません'}
+                  onClick={pasteEntry}
+                  disabled={clipboardEntry === null}
+                  style={clipboardEntry === null ? { opacity: 0.35, cursor: 'default' } : undefined}
+                >
+                  <svg viewBox="0 0 24 24" fill="currentColor" width="1.1em" height="1.1em">
+                    <path d="M19 2h-4.18C14.4.84 13.3 0 12 0c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm7 18H5V4h2v3h10V4h2v16z"/>
+                  </svg>
+                </button>
               </div>
             </div>
 
@@ -1818,7 +1939,7 @@ export default function App() {
               <div className="free-input-modal-backdrop" onClick={() => setFreeInputModal(null)}>
                 <div className="free-input-modal" onClick={(event) => event.stopPropagation()}>
                   <div className="free-input-modal-head">
-                    <h3>{freeInputModal.isReadOnly ? '予定の確認' : '予定の入力'}</h3>
+                    <h3>{freeInputModal.mode === 'readonly' ? '予定の確認' : freeInputModal.mode === 'edit' ? '予定の編集' : '予定の入力'}</h3>
                   </div>
                   <div className="free-input-modal-body">
                     <label className="free-input-modal-label">
@@ -1827,7 +1948,7 @@ export default function App() {
                         type="text"
                         className="free-input-modal-text"
                         value={freeInputModal.text}
-                        readOnly={freeInputModal.isReadOnly}
+                        readOnly={freeInputModal.mode === 'readonly'}
                         placeholder="予定を入力"
                         autoFocus
                         style={freeInputModal.color ? {
@@ -1843,7 +1964,7 @@ export default function App() {
                     <div className="free-input-modal-label">
                       <span>時間</span>
                       <div className="free-input-time-row">
-                        {freeInputModal.isReadOnly ? (
+                        {freeInputModal.mode === 'readonly' ? (
                           <span className="free-input-modal-text free-input-modal-text-readonly">
                             {freeInputModal.time || '--:--'}
                           </span>
@@ -1859,7 +1980,7 @@ export default function App() {
                             }
                           />
                         )}
-                        {!freeInputModal.isReadOnly && freeInputModal.time ? (
+                        {freeInputModal.mode !== 'readonly' && freeInputModal.time ? (
                           <button
                             type="button"
                             className="row-action-button is-delete"
@@ -1877,13 +1998,13 @@ export default function App() {
                         ) : null}
                       </div>
                     </div>
-                    {(freeInputModal.time || freeInputModal.isReadOnly) ? (
+                    {(freeInputModal.time || freeInputModal.mode === 'readonly') ? (
                     <div className="free-input-modal-label">
                       <span>通知</span>
                       <select
                         className="free-input-notify-select"
                         value={freeInputModal.notifyMode}
-                        disabled={freeInputModal.isReadOnly}
+                        disabled={freeInputModal.mode === 'readonly'}
                         onChange={(e) =>
                           setFreeInputModal((prev) =>
                             prev ? { ...prev, notifyMode: e.target.value as FreeInputModalState['notifyMode'] } : null
@@ -1903,7 +2024,7 @@ export default function App() {
                               <input
                                 type="checkbox"
                                 checked={freeInputModal.notifyTo.includes(person)}
-                                disabled={freeInputModal.isReadOnly}
+                                disabled={freeInputModal.mode === 'readonly'}
                                 onChange={(e) =>
                                   setFreeInputModal((prev) => {
                                     if (!prev) return null
@@ -1923,7 +2044,7 @@ export default function App() {
                       ) : null}
                     </div>
                     ) : null}
-                    {!freeInputModal.isReadOnly ? (
+                    {freeInputModal.mode !== 'readonly' ? (
                       <label className="free-input-modal-label free-input-modal-color-row">
                         <span>色</span>
                         <input
@@ -1938,7 +2059,7 @@ export default function App() {
                       <textarea
                         className="free-input-modal-textarea"
                         value={freeInputModal.memo}
-                        readOnly={freeInputModal.isReadOnly}
+                        readOnly={freeInputModal.mode === 'readonly'}
                         placeholder="メモ（任意）"
                         rows={4}
                         onChange={(e) => setFreeInputModal((prev) => (prev ? { ...prev, memo: e.target.value } : null))}
@@ -1946,7 +2067,7 @@ export default function App() {
                     </label>
                   </div>
                   <div className="free-input-modal-actions">
-                    {freeInputModal.isReadOnly ? (
+                    {freeInputModal.mode === 'readonly' ? (
                       <>
                         {freeInputModal.notifyMode !== 'off' && freeInputModal.notifyTo.length > 0 ? (
                           <button
@@ -1996,6 +2117,34 @@ export default function App() {
                             通知テスト
                           </button>
                         ) : null}
+                        <button className="sync-button" onClick={() => {
+                          if (!freeInputModal?.rowId) return
+                          const row = dayEditor.inputs.find((r) => r.rowId === freeInputModal.rowId)
+                          if (row && row.person !== selectedPerson) {
+                            const otherLabel = row.person === 'tarchin' ? 'たーちん' : 'やっちん'
+                            setConfirmModal({
+                              kind: 'warning',
+                              title: '他の人の予定を編集',
+                              message: `これは${otherLabel}の予定です。編集を続けますか？`,
+                              confirmLabel: 'はい',
+                              cancelLabel: 'いいえ',
+                              onConfirm: () => setFreeInputModal((prev) => prev ? { ...prev, mode: 'edit' } : null),
+                            })
+                          } else {
+                            setFreeInputModal((prev) => prev ? { ...prev, mode: 'edit' } : null)
+                          }
+                        }}>
+                          編集
+                        </button>
+                        <button className="nav-button" onClick={() => setFreeInputModal(null)}>
+                          戻る
+                        </button>
+                      </>
+                    ) : freeInputModal.mode === 'edit' ? (
+                      <>
+                        <button className="sync-button" onClick={updateFreeInputModal}>
+                          保存
+                        </button>
                         <button className="nav-button" onClick={() => setFreeInputModal(null)}>
                           戻る
                         </button>

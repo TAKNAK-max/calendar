@@ -1193,7 +1193,7 @@ select {
 
 .free-entry-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 5.2rem 5.5rem 2.2rem;
+  grid-template-columns: minmax(0, 1fr) 5.2rem 5.5rem 2.2rem 2.2rem;
   gap: 0.35rem;
   align-items: center;
 }
@@ -1234,7 +1234,9 @@ select {
   font-variant-numeric: tabular-nums;
 }
 
-.row-action-button.is-delete {
+.row-action-button.is-delete,
+.row-action-button.is-copy,
+.row-action-button.is-copy-done {
   min-height: 2rem;
   min-width: 2.2rem;
   padding: 0.2rem;
@@ -1243,9 +1245,21 @@ select {
   justify-content: center;
 }
 
+.row-action-button.is-copy {
+  border-color: #8bb0d3;
+  background: #e8f0ff;
+  color: #2a4a7a;
+}
+
+.row-action-button.is-copy-done {
+  border-color: #5a9e6f;
+  background: #e4f5eb;
+  color: #1f6b3a;
+}
+
 .free-add-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 4rem 5.5rem 2.2rem;
+  grid-template-columns: minmax(0, 1fr) 4rem 5.5rem 2.2rem 2.2rem;
   gap: 0.35rem;
   align-items: center;
   padding: 0.2rem 0;
