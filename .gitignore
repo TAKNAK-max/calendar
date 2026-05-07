@@ -26,3 +26,9 @@ dist-ssr
 /calendar/
 .superpowers/
 
+# Capacitor
+ios/App/Pods/
+ios/App/App.xcodeproj/project.xcworkspace/xcuserdata/
+ios/.xcode.env.local
+.capacitor/
+
