@@ -257,8 +257,7 @@ select {
   padding: 0.3rem 0.5rem;
 }
 
-.developer-panel,
-.google-sync-panel {
+.developer-panel {
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 0.35rem 0.45rem;
@@ -266,8 +265,7 @@ select {
   gap: 0.45rem;
 }
 
-.developer-panel summary,
-.google-sync-panel summary {
+.developer-panel summary {
   cursor: pointer;
   color: var(--ink-soft);
   font-size: 0.82rem;

@@ -294,6 +294,31 @@ function notifyModeLabel(mode: 'off' | 'time' | '15min' | '30min' | '1h' | '2h')
   return labels[mode] ?? '通知なし'
 }
 
+function renderMemoWithLinks(memo: string): (string | React.ReactNode)[] {
+  const urlPattern = /https?:\/\/[^\s]+/g
+  const parts: (string | React.ReactNode)[] = []
+  let lastIndex = 0
+
+  memo.replace(urlPattern, (match, offset) => {
+    if (offset > lastIndex) {
+      parts.push(memo.slice(lastIndex, offset))
+    }
+    parts.push(
+      <a key={`link-${offset}`} href={match} target="_blank" rel="noopener noreferrer" style={{ color: '#0066cc', textDecoration: 'underline', wordBreak: 'break-all' }}>
+        {match}
+      </a>
+    )
+    lastIndex = offset + match.length
+    return match
+  })
+
+  if (lastIndex < memo.length) {
+    parts.push(memo.slice(lastIndex))
+  }
+
+  return parts.length > 0 ? parts : [memo]
+}
+
 export default function App() {
   const isLocalMode = useMemo(() => isLocalModeQuery(), [])
   const [authState, setAuthState] = useState<AuthState>('checking')
@@ -2056,14 +2081,31 @@ export default function App() {
                     ) : null}
                     <label className="free-input-modal-label">
                       <span>メモ</span>
-                      <textarea
-                        className="free-input-modal-textarea"
-                        value={freeInputModal.memo}
-                        readOnly={freeInputModal.mode === 'readonly'}
-                        placeholder="メモ（任意）"
-                        rows={4}
-                        onChange={(e) => setFreeInputModal((prev) => (prev ? { ...prev, memo: e.target.value } : null))}
-                      />
+                      {freeInputModal.mode === 'readonly' && freeInputModal.memo ? (
+                        <div className="free-input-modal-memo-display" style={{
+                          padding: '0.5rem',
+                          border: '1px solid #ccc',
+                          borderRadius: '4px',
+                          backgroundColor: '#f9f9f9',
+                          minHeight: '100px',
+                          overflow: 'auto',
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-word',
+                          fontFamily: 'inherit',
+                          lineHeight: '1.5'
+                        }}>
+                          {renderMemoWithLinks(freeInputModal.memo)}
+                        </div>
+                      ) : (
+                        <textarea
+                          className="free-input-modal-textarea"
+                          value={freeInputModal.memo}
+                          readOnly={freeInputModal.mode === 'readonly'}
+                          placeholder="メモ（任意）"
+                          rows={4}
+                          onChange={(e) => setFreeInputModal((prev) => (prev ? { ...prev, memo: e.target.value } : null))}
+                        />
+                      )}
                     </label>
                   </div>
                   <div className="free-input-modal-actions">

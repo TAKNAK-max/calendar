@@ -142,6 +142,7 @@ function sanitizeEntry(entry) {
     id: entry.id,
     date: entry.date,
     text: entry.text,
+    memo: typeof entry.memo === 'string' ? entry.memo : undefined,
     person: entry.person,
     category: entry.category,
     color: typeof entry.color === 'string' ? entry.color : undefined,
