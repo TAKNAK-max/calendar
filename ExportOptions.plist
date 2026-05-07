@@ -9,7 +9,7 @@
   <string>TEAM_ID_PLACEHOLDER</string>
   <key>provisioningProfiles</key>
   <dict>
-    <key>com.lancer-dev.calendar</key>
+    <key>com.lancerdev.calendar</key>
     <string>Calendar Ad Hoc</string>
   </dict>
   <key>compileBitcode</key>
